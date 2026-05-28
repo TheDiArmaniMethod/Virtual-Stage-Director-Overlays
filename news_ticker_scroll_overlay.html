@@ -1,0 +1,238 @@
+<!DOCTYPE html>
+<!--
+	Virtual Stage Director v1.6.10.5
+	News Ticker Scroll Overlay
+	Canvas: 1920×1080. 90px bar flush to bottom. 180×180 logo overlaid on top-left,
+	bottom-aligned, rising above the bar. Text scrolls in the bar to the right of
+	the logo's 180px footprint.
+	Parameters: logoUrl, message1-5, separator, speed, barBg, textColor, t
+	Live speed: BroadcastCustomEvent { type: 'newsticker_speed', speed: <number> }
+-->
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<title>News Ticker Scroll Overlay</title>
+	<style>
+		* { margin: 0; padding: 0; box-sizing: border-box; }
+
+		body {
+			width: 1920px;
+			height: 1080px;
+			overflow: hidden;
+			background: transparent;
+		}
+
+		/* 90px bar, flush to bottom, text zone indented past the 180px logo footprint */
+		#ticker-bar {
+			position: fixed;
+			bottom: 0;
+			left: 0;
+			width: 1920px;
+			height: 90px;
+			display: flex;
+			align-items: center;
+			overflow: hidden;
+		}
+
+		/* Spacer reserves the 180px logo footprint so text doesn't scroll under it */
+		#logo-spacer {
+			width: 180px;
+			height: 90px;
+			flex-shrink: 0;
+		}
+
+		#scroll-zone {
+			width: 1740px;
+			height: 100%;
+			overflow: hidden;
+			display: flex;
+			align-items: center;
+			flex-shrink: 0;
+		}
+
+		#scroll-text {
+			white-space: nowrap;
+			font-family: 'Arial', sans-serif;
+			font-size: 36px;
+			font-weight: 600;
+			will-change: transform;
+			display: inline-block;
+		}
+
+		/* Logo is a separate layer, bottom-aligned, rising above the bar */
+		#logo {
+			position: fixed;
+			bottom: 15px;
+			left: 15px;
+			width: 180px;
+			height: 180px;
+			object-fit: contain;
+			display: block;
+			z-index: 10;
+		}
+	</style>
+</head>
+<body>
+
+<div id="ticker-bar">
+	<div id="logo-spacer"></div>
+	<div id="scroll-zone">
+		<div id="scroll-text"></div>
+	</div>
+</div>
+
+<img id="logo" src="" alt="">
+
+<script>
+var currentSpeed = 80;
+var textEl;
+
+function init() {
+	var params    = new URLSearchParams(window.location.search);
+	var logoUrl   = params.get('logoUrl')   || '';
+	var separator      = params.get('separator')      || ' | ';
+	currentSpeed       = parseFloat(params.get('speed') || '80');
+	var barBg          = params.get('barBg')          || '#1a1a1a';
+	var textColor      = params.get('textColor')      || '#ffffff';
+	var separatorColor = params.get('separatorColor') || '#ffffff';
+
+	var messages = [];
+	for (var i = 1; i <= 5; i++) {
+		var m = params.get('message' + i);
+		if (m && m.trim()) messages.push(m.trim());
+	}
+
+	if (!logoUrl || messages.length === 0) return;
+
+	var bar    = document.getElementById('ticker-bar');
+	textEl     = document.getElementById('scroll-text');
+	var logoEl = document.getElementById('logo');
+
+	bar.style.background  = barBg;
+	textEl.style.color    = textColor;
+	logoEl.src            = logoUrl;
+
+	// Render alternating message / separator spans so each can have its own colour.
+	// Classes allow the live-colour handler to retarget spans without a reload.
+	textEl.innerHTML = '';
+	messages.forEach(function(msg, i) {
+		var msgSpan = document.createElement('span');
+		msgSpan.className   = 'msg-text';
+		msgSpan.textContent = msg;
+		msgSpan.style.color = textColor;
+		textEl.appendChild(msgSpan);
+
+		if (i < messages.length - 1) {
+			var sepSpan = document.createElement('span');
+			sepSpan.className   = 'sep-text';
+			sepSpan.textContent = separator;
+			sepSpan.style.color = separatorColor;
+			textEl.appendChild(sepSpan);
+		}
+	});
+
+	// Wait two frames so the browser measures the text before we read scrollWidth.
+	requestAnimationFrame(function() {
+		requestAnimationFrame(function() {
+			startScroll(textEl, currentSpeed);
+		});
+	});
+
+	window.addEventListener('resize', function() {
+		textEl.style.animation = 'none';
+		requestAnimationFrame(function() {
+			requestAnimationFrame(function() {
+				startScroll(textEl, currentSpeed);
+			});
+		});
+	});
+
+	connectOBS();
+}
+
+function startScroll(el, pixelsPerSecond) {
+	var zoneWidth = 1740; // 1920 - 180 (logo footprint)
+	var textWidth = el.scrollWidth;
+	var duration  = (zoneWidth + textWidth) / pixelsPerSecond;
+
+	// Remove any existing keyframe rule and inject a fresh one so the
+	// animation restarts cleanly from the correct geometry.
+	el.style.animation = 'none';
+	el.offsetHeight; // force reflow to clear animation state
+
+	var old = document.getElementById('ticker-kf');
+	if (old) old.remove();
+
+	var style = document.createElement('style');
+	style.id  = 'ticker-kf';
+	style.textContent =
+		'@keyframes ticker-scroll {' +
+		'  from { transform: translateX(' + zoneWidth + 'px); }' +
+		'  to   { transform: translateX(-' + textWidth + 'px); }' +
+		'}';
+	document.head.appendChild(style);
+
+	el.style.animation = 'ticker-scroll ' + duration.toFixed(2) + 's linear infinite';
+}
+
+function connectOBS() {
+	var ws;
+
+	function connect() {
+		ws = new WebSocket('ws://127.0.0.1:4455');
+
+		ws.onmessage = function(evt) {
+			var msg = JSON.parse(evt.data);
+
+			// OBS WebSocket v5 handshake
+			if (msg.op === 0) {
+				ws.send(JSON.stringify({
+					op: 1,
+					d: { rpcVersion: 1, eventSubscriptions: 1 }
+				}));
+				return;
+			}
+
+			if (msg.op !== 5 || msg.d.eventType !== 'CustomEvent') return;
+
+			var data = msg.d.eventData;
+			if (!data) return;
+
+			if (data.type === 'newsticker_speed') {
+				var newSpeed = parseFloat(data.speed);
+				if (!newSpeed || newSpeed <= 0) return;
+				currentSpeed = newSpeed;
+				if (textEl) startScroll(textEl, currentSpeed);
+			}
+
+			if (data.type === 'newsticker_colors') {
+				if (data.textColor) {
+					var msgs = document.querySelectorAll('.msg-text');
+					for (var i = 0; i < msgs.length; i++) msgs[i].style.color = data.textColor;
+				}
+				if (data.separatorColor) {
+					var seps = document.querySelectorAll('.sep-text');
+					for (var i = 0; i < seps.length; i++) seps[i].style.color = data.separatorColor;
+				}
+				if (data.barBg) {
+					document.getElementById('ticker-bar').style.background = data.barBg;
+				}
+			}
+		};
+
+		ws.onerror = function() { setTimeout(connect, 2000); };
+		ws.onclose = function() { setTimeout(connect, 2000); };
+	}
+
+	connect();
+}
+
+if (document.readyState === 'loading') {
+	document.addEventListener('DOMContentLoaded', init);
+} else {
+	init();
+}
+</script>
+
+</body>
+</html>

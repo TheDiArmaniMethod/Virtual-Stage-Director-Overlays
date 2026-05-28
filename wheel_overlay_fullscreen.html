@@ -1,0 +1,786 @@
+<!DOCTYPE html>
+<!--
+	Virtual Stage Director v1.6.8.1
+	- Fixed: Stage Left (and any non-Right) enter animation race condition.
+	  awaitingEnter flag now set in plugin.js BEFORE SetInputSettings so it is
+	  always true when wheel_ready arrives, regardless of whether OBS reloads the
+	  browser source immediately on URL change or only on SetSceneItemEnabled.
+	- Overlay now retries wheel_ready every 200 ms (up to 10 retries / 2 s) in case
+	  the first message was sent before plugin.js set awaitingEnter = true.
+	- hasEntered guard prevents duplicate wheel_enter messages (double-reload scenario)
+	  from re-triggering the animation while the wheel is already on-screen.
+	- 200 ms delay before enterStageAnimation() ensures OBS has made the source
+	  visible before the slide begins.
+	- Console logs added: enterStage URL param on load, direction+offsets on animate.
+ -->
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=1920, height=1080">
+	<title>Raffle Roulette Wheel V4 - Full Screen</title>
+	<style>
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+
+		body {
+			width: 1920px;
+			height: 1080px;
+			overflow: hidden;
+			background: transparent;
+			font-family: 'Arial', sans-serif;
+		}
+
+		/* Wheel Container - fully visible, center-right
+		   Container 1000×1000 px.
+		   left 920  → right edge 1920  (canvas edge = screen edge; wheel radius 480 ends at 1900)
+		   top   40  → bottom edge 1040 (wheel radius 480 ends at 1020, 60 px clear of bottom)
+		   Wheel centre: (920+500, 40+500) = (1420, 540)                                      */
+		#wheelContainer {
+			position: fixed;
+			left: -9999px;    /* No directional bias — JS sets the real position before any animation */
+			top:  -9999px;
+			width: 1000px;
+			height: 1000px;
+			transform-origin: center center;
+		}
+
+		/* Canvas for wheel */
+		#wheelCanvas {
+			width: 100%;
+			height: 100%;
+			display: block;
+		}
+
+		/* Pointer - positioned at top of wheel */
+		#pointer {
+			position: absolute;
+			left: 50%;
+			top: -20px;
+			transform: translateX(-50%);
+			width: 0;
+			height: 0;
+			border-left: 25px solid transparent;
+			border-right: 25px solid transparent;
+			border-top: 40px solid #FFD93D;
+			z-index: 100;
+			filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+		}
+
+		/* Winner Banner - centred over the wheel (left 74% ≈ x 1421 on 1920-wide canvas) */
+		#winnerBanner {
+			position: fixed;
+			left: 74%;
+			top: 50%;
+			transform: translate(-50%, -50%) scale(0);
+			background: #6C5CE7;
+			color: #FFFFFF;
+			padding: 40px 80px;
+			border-radius: 20px;
+			font-size: 48px;
+			font-weight: bold;
+			text-align: center;
+			z-index: 200;
+			box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+			opacity: 0;
+			min-width: 400px;
+		}
+
+		#winnerBanner.show {
+			animation: bannerPop 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+		}
+
+		@keyframes bannerPop {
+			0% {
+				transform: translate(-50%, -50%) scale(0);
+				opacity: 0;
+			}
+			100% {
+				transform: translate(-50%, -50%) scale(1);
+				opacity: 1;
+			}
+		}
+
+		#winnerBanner .title {
+			font-size: 32px;
+			margin-bottom: 15px;
+			opacity: 0.9;
+		}
+
+		#winnerBanner .name {
+			font-size: 56px;
+			font-weight: bold;
+		}
+
+		/* Confetti */
+		.confetti {
+			position: fixed;
+			width: 10px;
+			height: 10px;
+			z-index: 150;
+			pointer-events: none;
+		}
+	</style>
+</head>
+<body>
+
+	<div id="wheelContainer">
+		<div id="pointer"></div>
+		<canvas id="wheelCanvas"></canvas>
+	</div>
+
+	<div id="winnerBanner">
+		<div class="title">🎉 WINNER 🎉</div>
+		<div class="name" id="winnerName">Winner Name</div>
+	</div>
+
+<script>
+// ============================================================================
+// RAFFLE ROULETTE WHEEL OVERLAY V4 — FULL SCREEN VARIANT
+// URL params for initial load + URL hash (#spin:WinnerName:timestamp) for spin commands
+// ============================================================================
+
+const wheelState = {
+	canvas: null,
+	ctx: null,
+	rotation: 0,
+	isSpinning: false,
+	targetRotation: 0,
+	spinStartRotation: 0,
+	spinStartTime: 0,
+	spinDuration: 5000,
+	bannerDuration: 5000,
+	idleRotationSpeed: 18, // degrees per second
+	lastFrameTime: 0,
+	names: [],
+	settings: null,
+	audioContext: null,
+	clickInterval: null,
+	lastClickSegment: -1,
+	hasSpunOnce: false
+};
+
+/**
+ * Initialize the wheel
+ */
+function init() {
+	wheelState.canvas = document.getElementById('wheelCanvas');
+	wheelState.ctx = wheelState.canvas.getContext('2d');
+
+	// Set canvas resolution
+	wheelState.canvas.width = 1000;
+	wheelState.canvas.height = 1000;
+
+	// Load settings from URL parameters
+	loadSettingsFromURL();
+
+	// Position container silently at the correct offscreen start position.
+	// The enter animation is triggered by a wheel_enter BroadcastCustomEvent
+	// fired by plugin.js after the source is enabled — this decouples the
+	// animation from page-load timing and is fully reliable.
+	initContainerPosition();
+
+	// Connect to OBS WebSocket.
+	// Handshake: overlay sends wheel_ready on op:2 (and retries every 200 ms for up
+	// to 2 s).  plugin.js responds with wheel_enter once awaitingEnter is true.
+	// A hasEntered guard on the overlay side ignores duplicate wheel_enter messages
+	// (which can occur if OBS reloads the page twice — once on SetInputSettings and
+	// again on SetSceneItemEnabled).  hasEntered is reset on wheel_exit so the next
+	// show press works correctly without a page reload.
+	(function() {
+		var readyInterval = null;  // retry timer for wheel_ready
+		var hasEntered    = false; // true after first successful wheel_enter
+
+		console.log('[Wheel FS] Page loaded — enterStage param:', new URLSearchParams(window.location.search).get('enterStage'));
+
+		function clearReadyRetry() {
+			if (readyInterval) { clearInterval(readyInterval); readyInterval = null; }
+		}
+
+		function sendWheelReady(ws) {
+			if (ws.readyState === 1) {
+				ws.send(JSON.stringify({
+					op: 6,
+					d: {
+						requestType: 'BroadcastCustomEvent',
+						requestId:   'wheel-ready-' + Date.now(),
+						requestData: { eventData: { type: 'wheel_ready' } }
+					}
+				}));
+			}
+		}
+
+		function connect() {
+			var ws = new WebSocket('ws://127.0.0.1:4455');
+			ws.onmessage = function(evt) {
+				var msg = JSON.parse(evt.data);
+
+				// op:0 Hello — send Identify
+				if (msg.op === 0) {
+					ws.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
+					return;
+				}
+
+				// op:2 Identified — container is already at the correct off-screen position
+				// (initContainerPosition ran in init()).  Notify plugin.js and keep retrying
+				// every 200 ms until wheel_enter is received, in case plugin.js hasn't set
+				// awaitingEnter = true yet (fast-cache reload race condition).
+				if (msg.op === 2) {
+					clearReadyRetry();
+					sendWheelReady(ws);
+					var retries = 0;
+					readyInterval = setInterval(function() {
+						retries++;
+						if (retries > 10) { clearReadyRetry(); return; } // give up after 2 s
+						sendWheelReady(ws);
+					}, 200);
+					return;
+				}
+
+				if (msg.op !== 5 || msg.d.eventType !== 'CustomEvent') return;
+				var data = msg.d.eventData;
+				if (!data) return;
+
+				if (data.type === 'wheel_enter') {
+					// Always clear the retry interval — whether we animate or not.
+					clearReadyRetry();
+					if (!hasEntered) {
+						// First wheel_enter for this page show: start the animation.
+						// The 200 ms delay guarantees the OBS source is visible before
+						// the slide begins (handles the case where SetSceneItemEnabled
+						// hasn't been processed by OBS yet).
+						hasEntered = true;
+						console.log('[Wheel FS] wheel_enter received — enterStage:', wheelState.settings.enterStage);
+						setTimeout(function() { enterStageAnimation(); }, 200);
+					}
+					// Subsequent wheel_enter (duplicate) is silently ignored.
+					return;
+				}
+
+				if (data.type === 'wheel_exit') {
+					hasEntered = false; // allow the next show press to animate
+					exitStageAnimation();
+					return;
+				}
+
+				if (data.type !== 'wheel_spin') return;
+				if (wheelState.isSpinning) return;
+				spinWheel(data.winner || null);
+			};
+			ws.onerror = function() { clearReadyRetry(); setTimeout(connect, 2000); };
+			ws.onclose = function() { clearReadyRetry(); setTimeout(connect, 2000); };
+		}
+		connect();
+	})();
+
+	// Start animation loop
+	wheelState.lastFrameTime = Date.now();
+	requestAnimationFrame(animate);
+
+	console.log('[Wheel FS Overlay V4] Initialized with', wheelState.names.length, 'names');
+}
+
+/**
+ * Load settings from URL parameters
+ */
+function loadSettingsFromURL() {
+	const params = new URLSearchParams(window.location.search);
+
+	// Get names and parse
+	const namesStr = params.get('names') || '';
+	wheelState.names = namesStr.split('\n').filter(n => n.trim()).slice(0, 60);
+
+	// Get settings
+	wheelState.settings = {
+		selectionMode: params.get('selectionMode') || 'random',
+		segmentColor1: params.get('segmentColor1') || '#FF6B6B',
+		segmentColor2: params.get('segmentColor2') || '#4ECDC4',
+		wheelTextColor: params.get('wheelTextColor') || '#FFFFFF',
+		pointerColor: params.get('pointerColor') || '#FFD93D',
+		bannerBgColor: params.get('bannerBgColor') || '#6C5CE7',
+		bannerTextColor: params.get('bannerTextColor') || '#FFFFFF',
+		spinDuration: parseInt(params.get('spinDuration') || '5'),
+		bannerDuration: parseInt(params.get('bannerDuration') || '5'),
+		enterStage: params.get('enterStage') || 'right'
+	};
+
+	wheelState.spinDuration = wheelState.settings.spinDuration * 1000;
+	wheelState.bannerDuration = wheelState.settings.bannerDuration * 1000;
+
+	// Update pointer color
+	document.getElementById('pointer').style.borderTopColor = wheelState.settings.pointerColor;
+
+	// Update banner colors
+	const banner = document.getElementById('winnerBanner');
+	banner.style.background = wheelState.settings.bannerBgColor;
+	banner.style.color = wheelState.settings.bannerTextColor;
+
+	console.log('[Wheel FS Overlay] Loaded', wheelState.names.length, 'names from URL');
+	console.log('[Wheel FS Overlay] Settings:', wheelState.settings);
+}
+
+/**
+ * Return position data for the chosen entry direction.
+ *   prop       — the CSS property being animated (left or top)
+ *   offScreen  — starting (and ending) off-screen value
+ *   rest       — on-screen resting value for prop
+ *   staticProp — the other axis, set once without animation
+ *   staticVal  — value for staticProp at rest
+ *   bannerLeft — left% for the winner banner, centred over the wheel
+ */
+/**
+ * Return position data for the chosen entry direction.
+ * All directions use the same prop/offScreen/rest/staticProp pattern.
+ * The CSS default is left:-9999px so there is no Stage Right bias and no
+ * stylesheet conflict when inline styles override the default.
+ *
+ *   prop       — CSS property being animated (left or top)
+ *   offScreen  — off-screen value for prop (animation start and exit end)
+ *   rest       — on-screen resting value for prop
+ *   staticProp — the other axis, fixed once, not animated
+ *   staticVal  — value for staticProp at rest
+ *   bannerLeft — left% for the winner banner, centred over the wheel
+ */
+function getStagePositions(enterStage) {
+	switch (enterStage) {
+		case 'left':
+			return { prop: 'left', offScreen: '-1200px', rest: '0px',   staticProp: 'top',  staticVal: '40px',  bannerLeft: '26%' };
+		case 'bottom':
+			return { prop: 'top',  offScreen: '1200px',  rest: '40px',  staticProp: 'left', staticVal: '460px', bannerLeft: '50%' };
+		case 'top':
+			return { prop: 'top',  offScreen: '-1200px', rest: '40px',  staticProp: 'left', staticVal: '460px', bannerLeft: '50%' };
+		default: // right
+			return { prop: 'left', offScreen: '1920px',  rest: '920px', staticProp: 'top',  staticVal: '40px',  bannerLeft: '74%' };
+	}
+}
+
+/**
+ * Called from init() — positions the container at the correct offscreen start
+ * without any animation.  The CSS default left:-9999px means the container is
+ * always fully off-screen before this runs, so there is no flash.
+ */
+function initContainerPosition() {
+	var pos = getStagePositions(wheelState.settings.enterStage);
+	var container = document.getElementById('wheelContainer');
+	container.style.transition          = 'none';
+	container.style[pos.staticProp]     = pos.staticVal;
+	container.style[pos.prop]           = pos.offScreen;
+	document.getElementById('winnerBanner').style.left = pos.bannerLeft;
+}
+
+/**
+ * Triggered by wheel_enter BroadcastCustomEvent from plugin.js.
+ * Re-snaps to the offscreen position (handles the no-reload case), then after
+ * a short paint-frame gap starts the slide-in transition.
+ */
+function enterStageAnimation() {
+	var pos = getStagePositions(wheelState.settings.enterStage);
+	console.log('[Wheel FS] enterStageAnimation — direction:', wheelState.settings.enterStage,
+	            '| prop:', pos.prop, '| offScreen:', pos.offScreen, '→ rest:', pos.rest);
+	var container = document.getElementById('wheelContainer');
+	document.getElementById('winnerBanner').style.left = pos.bannerLeft;
+
+	container.style.transition          = 'none';
+	container.style[pos.staticProp]     = pos.staticVal;
+	container.style[pos.prop]           = pos.offScreen;
+
+	// setTimeout(50) guarantees at least one painted frame at the offscreen
+	// position before the transition fires, regardless of Chromium's batching.
+	setTimeout(function() {
+		container.style.transition      = pos.prop + ' 0.65s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+		container.style[pos.prop]       = pos.rest;
+	}, 50);
+}
+
+/**
+ * Slide the wheel container back off-screen in the same direction it entered.
+ */
+function exitStageAnimation() {
+	var pos = getStagePositions(wheelState.settings.enterStage);
+	var container = document.getElementById('wheelContainer');
+	container.style.transition          = pos.prop + ' 0.5s cubic-bezier(0.55, 0.055, 0.675, 0.19)';
+	container.style[pos.prop]           = pos.offScreen;
+}
+
+/**
+ * Spin the wheel to land on winner
+ * FINAL CORRECT VERSION
+ */
+function spinWheel(winner) {
+	if (wheelState.names.length === 0) {
+		console.error('[Wheel FS Overlay] No names configured');
+		return;
+	}
+
+	// Clean up any previous spin's banner and confetti
+	hideWinnerBanner();
+	document.querySelectorAll('.confetti').forEach(function(el) { el.remove(); });
+
+	// Find winner index
+	let targetWinnerIndex = 0;
+	if (winner) {
+		targetWinnerIndex = wheelState.names.indexOf(winner);
+		if (targetWinnerIndex === -1) {
+			console.warn('[Wheel FS Overlay] Winner not found in list, using random');
+			targetWinnerIndex = Math.floor(Math.random() * wheelState.names.length);
+		}
+	} else {
+		targetWinnerIndex = Math.floor(Math.random() * wheelState.names.length);
+	}
+
+	console.log('[Wheel FS Overlay] Target winner:', wheelState.names[targetWinnerIndex], 'at index', targetWinnerIndex);
+
+	// Calculate rotation to land on this winner
+	const anglePerSegment = 360 / wheelState.names.length;
+
+	// Add 5-8 full rotations for drama — MUST be a whole number so the
+	// fractional remainder doesn't offset the landing segment
+	const extraRotations = 5 + Math.floor(Math.random() * 4); // 5, 6, 7, or 8
+
+	// Centre of segment i is at (i + 0.5) * anglePerSegment.
+	// Random offset within middle 60% of segment (-0.3 to +0.3) for natural variation,
+	// never close enough to a boundary to land on the wrong segment.
+	const intraSegment = (Math.random() - 0.5) * 0.6; // -0.3 to +0.3
+	const targetRotation = (extraRotations * 360) + ((targetWinnerIndex + 0.5 + intraSegment) * anglePerSegment);
+
+	// targetRotation is absolute (from 0), spinStart is current visual position
+	wheelState.targetRotation = targetRotation;
+	wheelState.spinStartRotation = wheelState.rotation;
+	wheelState.isSpinning = true;
+	wheelState.spinStartTime = Date.now();
+	wheelState.hasSpunOnce = true;
+
+	console.log('[Wheel FS Overlay] Will rotate by:', targetRotation, 'degrees');
+
+	// Start click sounds
+	startClickSounds();
+
+	// Schedule winner banner - show AFTER wheel stops
+	// Use the pre-determined winner directly — avoids floating-point rotation re-derivation
+	const confirmedWinner = wheelState.names[targetWinnerIndex];
+	setTimeout(function() {
+		showWinnerBanner(confirmedWinner);
+		stopClickSounds();
+
+		// Hide banner after duration
+		setTimeout(function() {
+			hideWinnerBanner();
+		}, wheelState.bannerDuration);
+
+	}, wheelState.spinDuration);
+}
+
+/**
+ * Show winner banner with confetti
+ */
+function showWinnerBanner(name) {
+	const banner = document.getElementById('winnerBanner');
+	document.getElementById('winnerName').textContent = name;
+	banner.classList.add('show');
+
+	// Create confetti
+	createConfetti();
+}
+
+/**
+ * Hide winner banner
+ */
+function hideWinnerBanner() {
+	const banner = document.getElementById('winnerBanner');
+	banner.classList.remove('show');
+}
+
+/**
+ * Create confetti explosion
+ */
+function createConfetti() {
+	const banner = document.getElementById('winnerBanner');
+	const bannerRect = banner.getBoundingClientRect();
+
+	// Get colors from settings
+	const colors = [
+		wheelState.settings.segmentColor1,
+		wheelState.settings.segmentColor2,
+		wheelState.settings.pointerColor,
+		'#FF6B6B',
+		'#4ECDC4',
+		'#FFD93D',
+		'#95E1D3',
+		'#F38181'
+	];
+
+	// Create confetti from left side
+	for (let i = 0; i < 50; i++) {
+		createConfettiParticle(bannerRect.left, bannerRect.top + bannerRect.height / 2, -1, colors);
+	}
+
+	// Create confetti from right side
+	for (let i = 0; i < 50; i++) {
+		createConfettiParticle(bannerRect.right, bannerRect.top + bannerRect.height / 2, 1, colors);
+	}
+}
+
+/**
+ * Create single confetti particle
+ */
+function createConfettiParticle(x, y, direction, colors) {
+	const confetti = document.createElement('div');
+	confetti.className = 'confetti';
+	confetti.style.left = x + 'px';
+	confetti.style.top = y + 'px';
+	confetti.style.background = colors[Math.floor(Math.random() * colors.length)];
+
+	document.body.appendChild(confetti);
+
+	// Random velocity
+	const vx = direction * (Math.random() * 5 + 3);
+	const vy = -(Math.random() * 8 + 5);
+	const gravity = 0.3;
+	const rotation = Math.random() * 360;
+	const rotationSpeed = (Math.random() - 0.5) * 10;
+
+	let posX = x;
+	let posY = y;
+	let velX = vx;
+	let velY = vy;
+	let currentRotation = rotation;
+	let opacity = 1;
+
+	const duration = wheelState.bannerDuration;
+	const startTime = Date.now();
+
+	function animateConfetti() {
+		const elapsed = Date.now() - startTime;
+
+		if (elapsed > duration) {
+			confetti.remove();
+			return;
+		}
+
+		// Physics
+		velY += gravity;
+		posX += velX;
+		posY += velY;
+		currentRotation += rotationSpeed;
+
+		// Fade out near end
+		if (elapsed > duration * 0.7) {
+			opacity = 1 - ((elapsed - duration * 0.7) / (duration * 0.3));
+		}
+
+		confetti.style.left = posX + 'px';
+		confetti.style.top = posY + 'px';
+		confetti.style.transform = 'rotate(' + currentRotation + 'deg)';
+		confetti.style.opacity = opacity;
+
+		requestAnimationFrame(animateConfetti);
+	}
+
+	requestAnimationFrame(animateConfetti);
+}
+
+/**
+ * Animation loop
+ */
+function animate() {
+	const now = Date.now();
+	const deltaTime = (now - wheelState.lastFrameTime) / 1000;
+	wheelState.lastFrameTime = now;
+
+	if (wheelState.isSpinning) {
+		// Spinning animation — interpolate directly from spinStartRotation to targetRotation
+		const elapsed = now - wheelState.spinStartTime;
+		const progress = Math.min(elapsed / wheelState.spinDuration, 1);
+
+		// Ease out quintic — smooth deceleration
+		const eased = 1 - Math.pow(1 - progress, 5);
+
+		wheelState.rotation = wheelState.spinStartRotation + (wheelState.targetRotation - wheelState.spinStartRotation) * eased;
+
+		// Stop spinning when complete — snap exactly to target
+		if (progress >= 1) {
+			wheelState.rotation = wheelState.targetRotation % 360; // clean reset, no residual
+			wheelState.isSpinning = false;
+		}
+	} else if (!wheelState.hasSpunOnce) {
+		// Idle rotation (only BEFORE first spin)
+		wheelState.rotation += wheelState.idleRotationSpeed * deltaTime;
+		wheelState.rotation = wheelState.rotation % 360;
+	}
+	// After spinning, wheel stays stopped at winner position
+
+	// Draw wheel
+	drawWheel();
+
+	requestAnimationFrame(animate);
+}
+
+/**
+ * Draw the wheel
+ */
+function drawWheel() {
+	const ctx = wheelState.ctx;
+	const canvas = wheelState.canvas;
+	const centerX = canvas.width / 2;
+	const centerY = canvas.height / 2;
+	const radius = 480;
+
+	// Clear canvas
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+	if (wheelState.names.length === 0) return;
+
+	// Save context
+	ctx.save();
+
+	// Rotate canvas
+	ctx.translate(centerX, centerY);
+	ctx.rotate((wheelState.rotation * Math.PI) / 180);
+	ctx.translate(-centerX, -centerY);
+
+	// Draw segments starting from TOP, going COUNTER-CLOCKWISE
+	const anglePerSegment = (2 * Math.PI) / wheelState.names.length;
+	const startOffset = (3 * Math.PI) / 2; // 270 degrees in radians = TOP
+
+	for (let i = 0; i < wheelState.names.length; i++) {
+		// Going counter-clockwise: subtract instead of add
+		const startAngle = startOffset - (i * anglePerSegment);
+		const endAngle = startOffset - ((i + 1) * anglePerSegment);
+
+		// Determine color
+		const color = i % 2 === 0 ? wheelState.settings.segmentColor1 : wheelState.settings.segmentColor2;
+
+		// Draw segment
+		ctx.beginPath();
+		ctx.moveTo(centerX, centerY);
+		ctx.arc(centerX, centerY, radius, startAngle, endAngle, true);
+		ctx.closePath();
+		ctx.fillStyle = color;
+		ctx.fill();
+
+		// Draw segment border
+		ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+		ctx.lineWidth = 2;
+		ctx.stroke();
+
+		// Draw text on ALL segments
+		const midAngle = startAngle - anglePerSegment / 2;
+
+		ctx.save();
+		ctx.translate(centerX, centerY);
+		ctx.rotate(midAngle);
+
+		// Position text - align to OUTER edge
+		ctx.textAlign = 'right';
+		ctx.textBaseline = 'middle';
+		ctx.fillStyle = wheelState.settings.wheelTextColor;
+
+		// Calculate font size based on name length
+		const name = wheelState.names[i];
+		let fontSize = 24;
+		if (name.length > 15) fontSize = 18;
+		if (name.length > 20) fontSize = 16;
+		ctx.font = 'bold ' + fontSize + 'px Arial';
+
+		// Draw text near outer edge (moved from 0.85 to 0.92)
+		ctx.fillText(wheelState.names[i], radius * 0.92, 0);
+
+		ctx.restore();
+	}
+
+	// Draw outer ring around wheel edge
+	ctx.beginPath();
+	ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+	ctx.strokeStyle = wheelState.settings.pointerColor;
+	ctx.lineWidth = 2;
+	ctx.stroke();
+
+	// Draw center circle
+	ctx.beginPath();
+	ctx.arc(centerX, centerY, 40, 0, 2 * Math.PI);
+	ctx.fillStyle = wheelState.settings.pointerColor;
+	ctx.fill();
+	ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+	ctx.lineWidth = 3;
+	ctx.stroke();
+
+	// Restore context
+	ctx.restore();
+}
+
+/**
+ * Start click sounds during spinning
+ */
+function startClickSounds() {
+	// Initialize Web Audio API
+	if (!wheelState.audioContext) {
+		try {
+			wheelState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+		} catch (e) {
+			console.warn('[Wheel FS] AudioContext unavailable, spinning without sound:', e);
+			return;
+		}
+	}
+
+	wheelState.lastClickSegment = -1;
+
+	// Play click sound based on rotation
+	wheelState.clickInterval = setInterval(function() {
+		if (!wheelState.isSpinning) return;
+
+		const anglePerSegment = 360 / wheelState.names.length;
+		const currentSegment = Math.floor((wheelState.rotation % 360) / anglePerSegment);
+
+		if (currentSegment !== wheelState.lastClickSegment) {
+			playClickSound();
+			wheelState.lastClickSegment = currentSegment;
+		}
+	}, 10);
+}
+
+/**
+ * Stop click sounds
+ */
+function stopClickSounds() {
+	if (wheelState.clickInterval) {
+		clearInterval(wheelState.clickInterval);
+		wheelState.clickInterval = null;
+	}
+}
+
+/**
+ * Play click sound using Web Audio API
+ */
+function playClickSound() {
+	if (!wheelState.audioContext) return;
+
+	const ctx = wheelState.audioContext;
+	const oscillator = ctx.createOscillator();
+	const gainNode = ctx.createGain();
+
+	oscillator.connect(gainNode);
+	gainNode.connect(ctx.destination);
+
+	oscillator.frequency.value = 800;
+	oscillator.type = 'square';
+
+	gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+	gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+
+	oscillator.start(ctx.currentTime);
+	oscillator.stop(ctx.currentTime + 0.05);
+}
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+	document.addEventListener('DOMContentLoaded', init);
+} else {
+	init();
+}
+
+</script>
+
+</body>
+</html>

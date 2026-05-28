@@ -1,0 +1,101 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.7.6 -->
+<html>
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=1920, height=1080">
+    <title>Lower Third Overlay</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            width: 1920px;
+            height: 1080px;
+            overflow: hidden;
+            background: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+        }
+        
+        .lower-third-container {
+            position: fixed;
+            bottom: 60px;
+            left: 60px;
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            gap: 0px;
+        }
+        
+        .name-box, .title-box {
+            padding: 18px 37px;
+            border-radius: 50px;
+            font-weight: 600;
+            white-space: nowrap;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+            display: inline-block;
+            width: fit-content;
+        }
+        
+        .name-box {
+            font-size: 48px;
+            letter-spacing: 0.5px;
+            position: relative;
+            z-index: 2;
+        }
+        
+        .title-box {
+            font-size: 37px;
+            letter-spacing: 0.3px;
+            margin-left: 60px;
+            margin-top: -10px;
+            position: relative;
+            z-index: 1;
+        }
+    </style>
+</head>
+<body>
+    <div class="lower-third-container" id="lowerThird">
+        <div class="name-box" id="nameBox"></div>
+        <div class="title-box" id="titleBox"></div>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        
+        const personName = params.get('personName') || 'Christopher di Armani';
+        const jobTitle = params.get('jobTitle') || 'Founder, The Di Armani Method for Non-Fiction Writers';
+        
+        const nameBackgroundColor = params.get('nameBackgroundColor') || '#220901';
+        const nameTextColor = params.get('nameTextColor') || '#ffe6a7';
+        const nameBorderWidth = params.get('nameBorderWidth') || '2';
+        
+        const titleBackgroundColor = params.get('titleBackgroundColor') || '#ffe6a7';
+        const titleTextColor = params.get('titleTextColor') || '#220901';
+        const titleBorderWidth = params.get('titleBorderWidth') || '2';
+        
+        const container = document.getElementById('lowerThird');
+        const nameBox = document.getElementById('nameBox');
+        const titleBox = document.getElementById('titleBox');
+        
+        // Set content
+        nameBox.textContent = personName;
+        titleBox.textContent = jobTitle;
+        
+        // Style name box - border color matches text color
+        nameBox.style.backgroundColor = nameBackgroundColor;
+        nameBox.style.color = nameTextColor;
+        nameBox.style.border = `${nameBorderWidth}px solid ${nameTextColor}`;
+        
+        // Style title box - border color matches text color
+        titleBox.style.backgroundColor = titleBackgroundColor;
+        titleBox.style.color = titleTextColor;
+        titleBox.style.border = `${titleBorderWidth}px solid ${titleTextColor}`;
+        
+        console.log('[Lower Third] Overlay rendered and ready for OBS transitions');
+    </script>
+</body>
+</html>

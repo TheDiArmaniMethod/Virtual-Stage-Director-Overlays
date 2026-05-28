@@ -1,0 +1,114 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.7.6 -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1920px;height:1080px;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}
+
+#container{
+  position:absolute;
+  bottom:60px;left:50%;transform:translateX(-50%);
+  width:90%;max-width:1600px;
+  background:var(--bg-color);
+  border-radius:20px;padding:50px;
+  display:flex;align-items:center;justify-content:center;gap:50px;
+  backdrop-filter:blur(10px);
+  border:3px solid rgba(255,255,255,0.3);
+  box-shadow:0 10px 40px rgba(0,0,0,0.3);
+  animation:fadeInUp 0.6s ease-out;
+}
+
+/* Cycling emoji icon */
+#emoji-icon{
+  flex-shrink:0;width:130px;height:130px;
+  display:flex;align-items:center;justify-content:center;
+  font-size:96px;
+}
+
+#text-content{flex:1;color:#fff}
+#headline{font-size:64px;font-weight:700;margin-bottom:18px;text-shadow:2px 2px 8px rgba(0,0,0,0.3);line-height:1.2}
+#subtext{font-size:40px;font-weight:400;opacity:0.95;text-shadow:1px 1px 4px rgba(0,0,0,0.2);line-height:1.4}
+
+/* Mini reaction strip */
+#reactions-strip{
+  flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:16px;
+}
+.strip-label{font-size:22px;color:rgba(255,255,255,0.8);font-weight:500;text-align:center}
+.strip-emojis{display:flex;gap:14px}
+.strip-emoji{
+  width:72px;height:72px;border-radius:50%;
+  background:rgba(255,255,255,0.15);border:2px solid rgba(255,255,255,0.3);
+  display:flex;align-items:center;justify-content:center;
+  font-size:40px;
+}
+.strip-emoji.glow{
+  border-color:rgba(255,255,255,0.8);
+  background:rgba(255,255,255,0.25);
+  box-shadow:0 0 20px rgba(255,255,255,0.3);
+}
+
+@keyframes fadeInUp{from{opacity:0;transform:translateX(-50%) translateY(20px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+</style>
+  <script>
+    /* ── Brand colour via URL parameter ─────────────────────────────────────
+       Usage: ?bgColor=220901&bgOpacity=95
+       bgColor  : hex colour without # (default: 220901 — brand brown)
+       bgOpacity: 0-100 (default: 95)
+       Examples:
+         Default brand brown : ?bgColor=220901&bgOpacity=95
+         Zoom blue           : ?bgColor=2D8CFF&bgOpacity=95
+         Dark slate          : ?bgColor=14141E&bgOpacity=96
+         Forest green        : ?bgColor=108250&bgOpacity=95
+    ─────────────────────────────────────────────────────────────────────── */
+    (function() {
+      var qs = new URLSearchParams(location.search);
+      var hex = (qs.get('bgColor') || '220901').replace('#', '');
+      var opacity = Math.min(100, Math.max(0, parseFloat(qs.get('bgOpacity') || '95'))) / 100;
+      var r = parseInt(hex.substring(0,2), 16);
+      var g = parseInt(hex.substring(2,4), 16);
+      var b = parseInt(hex.substring(4,6), 16);
+      var rgba = 'rgba(' + r + ',' + g + ',' + b + ',' + opacity.toFixed(2) + ')';
+      document.documentElement.style.setProperty('--bg-color', rgba);
+    })();
+  </script>
+</head>
+<body>
+<div id="container">
+  <div id="emoji-icon" id="cycling-emoji">😊</div>
+
+  <div id="text-content">
+    <div id="headline">React to What You're Hearing!</div>
+    <div id="subtext">Click <strong>Reactions</strong> in your Zoom toolbar to send a quick response — no need to unmute</div>
+  </div>
+
+  <div id="reactions-strip">
+    <div class="strip-label">Available reactions</div>
+    <div class="strip-emojis">
+      <div class="strip-emoji" id="e0">👍</div>
+      <div class="strip-emoji" id="e1">❤️</div>
+      <div class="strip-emoji" id="e2">😂</div>
+      <div class="strip-emoji" id="e3">😮</div>
+      <div class="strip-emoji" id="e4">👏</div>
+      <div class="strip-emoji" id="e5">✋</div>
+    </div>
+    <div class="strip-label" style="font-size:18px">Find it in your Zoom toolbar →</div>
+  </div>
+</div>
+
+<script>
+const emojis = ['👍','❤️','😂','😮','😢','👏','✋','😊'];
+const icon = document.getElementById('cycling-emoji');
+const strips = [0,1,2,3,4,5].map(i => document.getElementById('e'+i));
+let idx = 0;
+
+setInterval(() => {
+  icon.textContent = emojis[idx % emojis.length];
+  strips.forEach(s => s.classList.remove('glow'));
+  if (idx < 6) strips[idx].classList.add('glow');
+  idx = (idx + 1) % emojis.length;
+}, 1400);
+</script>
+</body>
+</html>

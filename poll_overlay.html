@@ -1,0 +1,271 @@
+<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.8.7 -->
+<!-- v1.6.8.7: Correct-answer banner triggered by OBS BroadcastCustomEvent (poll_reveal).
+     No URL update / no source reload / no flash — mirrors the Raffle Wheel architecture.
+     poll_overlay.html maintains its own OBS WebSocket connection and shows the banner
+     in-memory when it receives the event, exactly as wheel_overlay.html does for spins. -->
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 1920px;
+            height: 1080px;
+            background: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            overflow: hidden;
+        }
+
+        #main-container {
+            position: absolute;
+            bottom: 60px;
+            left: 2.5%;
+            width: 95%;
+            border-radius: 12px;
+            padding: 30px;
+            backdrop-filter: blur(10px);
+            border: 2px solid rgba(255, 255, 255, 0.1);
+            animation: fadeIn 0.3s ease-out forwards;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; }
+            to   { opacity: 1; }
+        }
+
+        #poll-question {
+            font-size: 48px;
+            font-weight: bold;
+            margin-bottom: 30px;
+            text-align: center;
+            line-height: 1.3;
+        }
+
+        #answers-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            grid-template-rows: 1fr 1fr;
+            gap: 20px;
+        }
+
+        .answer-box {
+            border-radius: 8px;
+            padding: 20px;
+            display: flex;
+            align-items: center;
+            border: 2px solid rgba(255, 255, 255, 0.2);
+        }
+
+        .answer-number {
+            font-size: 36px;
+            font-weight: bold;
+            margin-right: 15px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+            flex-shrink: 0;
+        }
+
+        .answer-text {
+            font-size: 36px;
+            line-height: 1.3;
+            word-wrap: break-word;
+            text-shadow: 1px 1px 2px rgba(0, 0, 0, 0.8);
+        }
+
+        /* Grid positioning */
+        #a1 { grid-column: 1; grid-row: 1; }
+        #a2 { grid-column: 2; grid-row: 1; }
+        #a3 { grid-column: 1; grid-row: 2; }
+        #a4 { grid-column: 2; grid-row: 2; }
+
+        /* ── Correct-answer reveal banner ────────────────────────────────── */
+        #reveal-banner {
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%) scale(0);
+            border-radius: 12px;
+            padding: 24px 48px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.6);
+            border: 3px solid rgba(255, 255, 255, 0.3);
+            text-align: center;
+            z-index: 100;
+            opacity: 0;
+            min-width: 420px;
+            pointer-events: none;
+        }
+
+        #reveal-banner.show {
+            animation: bannerPop 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+        }
+
+        @keyframes bannerPop {
+            0%   { transform: translate(-50%, -50%) scale(0); opacity: 0; }
+            100% { transform: translate(-50%, -50%) scale(1); opacity: 1; }
+        }
+
+        #reveal-banner-label {
+            font-size: 30px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            margin-bottom: 10px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        #reveal-banner-answer {
+            font-size: 42px;
+            font-weight: 600;
+            line-height: 1.3;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div id="main-container">
+        <div id="poll-question">What is your question?</div>
+        <div id="answers-grid">
+            <div class="answer-box" id="a1">
+                <div class="answer-number">①</div>
+                <div class="answer-text" id="text1">Answer 1</div>
+            </div>
+            <div class="answer-box" id="a2">
+                <div class="answer-number">②</div>
+                <div class="answer-text" id="text2">Answer 2</div>
+            </div>
+            <div class="answer-box" id="a3">
+                <div class="answer-number">③</div>
+                <div class="answer-text" id="text3">Answer 3</div>
+            </div>
+            <div class="answer-box" id="a4">
+                <div class="answer-number">④</div>
+                <div class="answer-text" id="text4">Answer 4</div>
+            </div>
+        </div>
+
+        <!-- Correct-answer reveal banner — shown via poll_reveal WebSocket event, not URL params -->
+        <div id="reveal-banner">
+            <div id="reveal-banner-label">CORRECT ANSWER: #1</div>
+            <div id="reveal-banner-answer">Answer text goes here</div>
+        </div>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+
+        // Poll content
+        const question  = params.get('question')  || 'What is your question?';
+        const answer1   = params.get('answer1')   || 'Answer 1';
+        const answer2   = params.get('answer2')   || 'Answer 2';
+        const answer3   = params.get('answer3')   || 'Answer 3';
+        const answer4   = params.get('answer4')   || 'Answer 4';
+
+        // Visual params
+        const bgColor           = params.get('bgColor')           || '#000000';
+        const bgOpacity         = params.get('bgOpacity')         || '75';
+        const questionTextColor = params.get('questionTextColor') || '#ffffff';
+        const answerTextColor   = params.get('answerTextColor')   || '#ffffff';
+        const numberColor       = params.get('numberColor')       || '#4A9EFF';
+        const answerBgColor     = params.get('answerBgColor')     || null;
+        const correctBgColor    = params.get('correctBgColor')    || '#00ff00';
+
+        // Helper: hex → rgba
+        function hexToRgba(hex, alpha) {
+            hex = hex.replace('#', '');
+            const r = parseInt(hex.substring(0, 2), 16);
+            const g = parseInt(hex.substring(2, 4), 16);
+            const b = parseInt(hex.substring(4, 6), 16);
+            return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + alpha + ')';
+        }
+
+        // ── Populate content ─────────────────────────────────────────────
+        document.getElementById('poll-question').textContent = question;
+        document.getElementById('text1').textContent = answer1;
+        document.getElementById('text2').textContent = answer2;
+        document.getElementById('text3').textContent = answer3;
+        document.getElementById('text4').textContent = answer4;
+
+        // ── Apply main background ─────────────────────────────────────────
+        const opacity = parseFloat(bgOpacity) / 100;
+        document.getElementById('main-container').style.background = hexToRgba(bgColor, opacity);
+
+        // ── Apply text colors ─────────────────────────────────────────────
+        document.getElementById('poll-question').style.color = questionTextColor;
+        document.querySelectorAll('.answer-text').forEach(function(el) {
+            el.style.color = answerTextColor;
+        });
+        document.querySelectorAll('.answer-number').forEach(function(el) {
+            el.style.color = numberColor;
+        });
+
+        // ── Apply answer box backgrounds ──────────────────────────────────
+        const defaultAnswerBg = answerBgColor ? answerBgColor : hexToRgba(bgColor, 0.2);
+        document.querySelectorAll('.answer-box').forEach(function(box) {
+            box.style.background = defaultAnswerBg;
+        });
+
+        // ── Show reveal banner (called from WebSocket event) ──────────────
+        function showRevealBanner(idx, bgCol, textCol) {
+            bgCol   = bgCol   || '#00c800';
+            textCol = textCol || '#ffffff';
+
+            // Highlight the correct answer box (reset others first)
+            if (idx >= 1 && idx <= 4) {
+                document.querySelectorAll('.answer-box').forEach(function(box) {
+                    box.style.background = defaultAnswerBg;
+                });
+                document.getElementById('a' + idx).style.background = correctBgColor;
+            }
+
+            // Populate banner
+            var answerMap = { 1: answer1, 2: answer2, 3: answer3, 4: answer4 };
+            var correctAnswerText = answerMap[idx] || 'Answer';
+
+            var banner = document.getElementById('reveal-banner');
+            document.getElementById('reveal-banner-label').textContent = 'CORRECT ANSWER: #' + idx;
+            document.getElementById('reveal-banner-answer').textContent = correctAnswerText;
+            banner.style.background = hexToRgba(bgCol, 0.92);
+            document.getElementById('reveal-banner-label').style.color = textCol;
+            document.getElementById('reveal-banner-answer').style.color = textCol;
+
+            // Restart pop animation (handles re-reveal if called more than once)
+            banner.classList.remove('show');
+            void banner.offsetWidth; // force reflow to reset animation
+            banner.classList.add('show');
+
+            console.log('[Poll] Reveal banner shown — correct answer:', idx);
+        }
+
+        // ── OBS WebSocket connection — listens for poll_reveal custom events ──
+        // Same pattern as wheel_overlay.html. No reload, no flash.
+        (function() {
+            function connect() {
+                var ws = new WebSocket('ws://127.0.0.1:4455');
+                ws.onmessage = function(evt) {
+                    var msg = JSON.parse(evt.data);
+                    // Handshake
+                    if (msg.op === 0) {
+                        ws.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
+                        return;
+                    }
+                    // Only handle custom events
+                    if (msg.op !== 5 || msg.d.eventType !== 'CustomEvent') return;
+                    var data = msg.d.eventData;
+                    if (!data || data.type !== 'poll_reveal') return;
+                    showRevealBanner(parseInt(data.correctIndex), data.bannerBgColor, data.bannerTextColor);
+                };
+                ws.onerror = function() { setTimeout(connect, 2000); };
+                ws.onclose = function() { setTimeout(connect, 2000); };
+            }
+            connect();
+        })();
+
+        console.log('[Poll] Overlay ready — listening for poll_reveal events');
+    </script>
+</body>
+</html>

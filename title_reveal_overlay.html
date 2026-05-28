@@ -1,0 +1,338 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.10.12 -->
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Title Reveal Overlay</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 100vw;
+            height: 100vh;
+            overflow: hidden;
+            background: transparent;
+            font-family: 'Arial', sans-serif;
+        }
+
+        #container {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            text-align: center;
+            opacity: 0;
+            padding: 2vw;
+        }
+
+        #title {
+            font-weight: bold;
+            margin-bottom: 0.2em;
+            max-width: 100%;
+            word-wrap: break-word;
+        }
+
+        #subtitle {
+            max-width: 100%;
+            word-wrap: break-word;
+        }
+
+        .char, .word, .line {
+            display: inline-block;
+            opacity: 0;
+        }
+
+        /* Animation Keyframes */
+        @keyframes fadeUp {
+            from {
+                opacity: 0;
+                transform: translateY(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeDown {
+            from {
+                opacity: 0;
+                transform: translateY(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeLeft {
+            from {
+                opacity: 0;
+                transform: translateX(30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes fadeRight {
+            from {
+                opacity: 0;
+                transform: translateX(-30px);
+            }
+            to {
+                opacity: 1;
+                transform: translateX(0);
+            }
+        }
+
+        @keyframes zoomIn {
+            from {
+                opacity: 0;
+                transform: scale(0.5);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        @keyframes zoomOut {
+            from {
+                opacity: 0;
+                transform: scale(1.5);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1);
+            }
+        }
+
+        @keyframes slideUp {
+            from {
+                opacity: 0;
+                transform: translateY(100px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes slideDown {
+            from {
+                opacity: 0;
+                transform: translateY(-100px);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes flip {
+            from {
+                opacity: 0;
+                transform: rotateX(90deg);
+            }
+            to {
+                opacity: 1;
+                transform: rotateX(0);
+            }
+        }
+
+        @keyframes bounce {
+            0% {
+                opacity: 0;
+                transform: translateY(-50px);
+            }
+            60% {
+                opacity: 1;
+                transform: translateY(10px);
+            }
+            80% {
+                transform: translateY(-5px);
+            }
+            100% {
+                transform: translateY(0);
+            }
+        }
+
+        @keyframes fadeOutAll {
+            to {
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="container">
+        <div id="title"></div>
+        <div id="subtitle"></div>
+    </div>
+
+    <script>
+        // URL param parsing — v1.6.3.2 audit confirmed no encoding needed.
+        // maxlength constraints in title_reveal_pi.html (title: 200, sentence: 500)
+        // cap the worst-case URL at ~1066 chars, well under the 2000-char limit.
+        const params = new URLSearchParams(window.location.search);
+
+        const config = {
+            title:           params.get('title')                           || '',
+            sentence:        params.get('sentence')                        || '',
+            animation:       params.get('animation')                       || 'fade-up',
+            unit:            params.get('unit')                            || 'letter',
+            speed:           parseFloat(params.get('speed'))               || 1,
+            fontStyle:       params.get('fontStyle')                       || 'normal',
+            googleFont:      params.get('googleFont')                      || '',
+            fontWeight:      parseInt(params.get('fontWeight'))            || 400,
+            color:           params.get('color')                           || '#ffffff',
+            fontSize:        parseFloat(params.get('fontSize'))            || 5,
+            lineHeight:      parseFloat(params.get('lineHeight'))          || 1.2,
+            shadowDistance:  parseInt(params.get('shadowDistance'))        || 5,
+            shadowBlur:      parseInt(params.get('shadowBlur'))            || 5,
+            shadowSize:      parseInt(params.get('shadowSize'))            || 0,
+            shadowDirection: parseInt(params.get('shadowDirection'))       || 45,
+            shadowColor:     params.get('shadowColor')                     || '#000000',
+            margin:          parseInt(params.get('margin'))                || 0,
+            positionX:       parseInt(params.get('positionX'))             || 50,
+            positionY:       parseInt(params.get('positionY'))             || 50
+        };
+
+        const container = document.getElementById('container');
+        const titleEl = document.getElementById('title');
+        const subtitleEl = document.getElementById('subtitle');
+
+        function loadGoogleFont() {
+            if (config.googleFont) {
+                const link = document.createElement('link');
+                link.rel = 'stylesheet';
+                const fontName = config.googleFont.replace(/\s+/g, '+');
+                link.href = `https://fonts.googleapis.com/css2?family=${fontName}:wght@100;300;400;500;600;700;900&display=swap`;
+                document.head.appendChild(link);
+                
+                document.body.style.fontFamily = `"${config.googleFont}", Arial, sans-serif`;
+            }
+        }
+
+        function applyStyles() {
+            // Position container
+            container.style.left = '0';
+            container.style.top = '0';
+            
+            // Alignment based on position
+            const verticalAlign = config.positionY <= 33 ? 'flex-start' : 
+                                 config.positionY >= 67 ? 'flex-end' : 'center';
+            const horizontalAlign = config.positionX <= 33 ? 'flex-start' : 
+                                   config.positionX >= 67 ? 'flex-end' : 'center';
+            
+            container.style.justifyContent = verticalAlign;
+            container.style.alignItems = horizontalAlign;
+            
+            // Calculate shadow
+            const shadowX = Math.cos(config.shadowDirection * Math.PI / 180) * config.shadowDistance;
+            const shadowY = Math.sin(config.shadowDirection * Math.PI / 180) * config.shadowDistance;
+            const textShadow = `${shadowX}px ${shadowY}px ${config.shadowBlur}px ${config.shadowColor}`;
+            
+            // Apply styles using vw for responsive sizing
+            const titleSize = config.fontSize;
+            const subtitleSize = config.fontSize * 0.5;
+            
+            titleEl.style.fontSize = titleSize + 'vw';
+            titleEl.style.color = config.color;
+            titleEl.style.fontWeight = config.fontWeight;
+            titleEl.style.fontStyle = config.fontStyle;
+            titleEl.style.textShadow = textShadow;
+            titleEl.style.lineHeight = config.lineHeight;
+            titleEl.style.margin = config.margin + 'px';
+            
+            subtitleEl.style.fontSize = subtitleSize + 'vw';
+            subtitleEl.style.color = config.color;
+            subtitleEl.style.fontWeight = config.fontWeight;
+            subtitleEl.style.fontStyle = config.fontStyle;
+            subtitleEl.style.textShadow = textShadow;
+            subtitleEl.style.lineHeight = config.lineHeight;
+            subtitleEl.style.margin = config.margin + 'px';
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function wrapText(text, unit) {
+            if (!text) return '';
+
+            if (unit === 'all') {
+                return `<span class="line">${escapeHtml(text)}</span>`;
+            }
+
+            if (unit === 'line') {
+                return text.split('\n').map(line =>
+                    `<span class="line">${escapeHtml(line)}</span>`
+                ).join('<br>');
+            }
+
+            if (unit === 'word') {
+                return text.split(/(\s+)/).map(part => {
+                    if (part.trim()) {
+                        return `<span class="word">${escapeHtml(part)}</span>`;
+                    }
+                    return part;
+                }).join('');
+            }
+
+            if (unit === 'letter') {
+                return text.split('').map(char => {
+                    if (char === ' ') return ' ';
+                    if (char === '\n') return '<br>';
+                    return `<span class="char">${escapeHtml(char)}</span>`;
+                }).join('');
+            }
+
+            return escapeHtml(text);
+        }
+
+        function animateIn() {
+            titleEl.innerHTML = wrapText(config.title, config.unit);
+            subtitleEl.innerHTML = wrapText(config.sentence, config.unit);
+            
+            const elements = container.querySelectorAll('.char, .word, .line');
+            const animationName = config.animation.replace(/-([a-z])/g, (g) => g[1].toUpperCase());
+            const baseDelay = 50 / config.speed;
+            
+            container.style.opacity = '1';
+            
+            if (config.unit === 'all') {
+                elements.forEach(el => {
+                    el.style.animation = `${animationName} ${0.8 / config.speed}s ease-out forwards`;
+                });
+            } else {
+                elements.forEach((el, i) => {
+                    const delay = i * baseDelay;
+                    el.style.animation = `${animationName} ${0.6 / config.speed}s ease-out ${delay}ms forwards`;
+                });
+            }
+        }
+
+        function init() {
+            loadGoogleFont();
+            applyStyles();
+            
+            // Always animate on load - visibility is controlled by OBS enabling/disabling the browser source
+            setTimeout(() => animateIn(), 100);
+        }
+
+        init();
+    </script>
+</body>
+</html>

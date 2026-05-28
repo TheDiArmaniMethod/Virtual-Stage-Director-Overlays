@@ -1,0 +1,230 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.10.12 -->
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Fake Chat Overlay</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@400;600&display=swap" rel="stylesheet">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            width: 1920px;
+            height: 1080px;
+            overflow: hidden;
+            background: transparent;
+            font-family: 'Poppins', sans-serif;
+        }
+
+        :root {
+            --name-bg-color: #ffe6a7;
+            --message-bg-color: #432818;
+        }
+
+        #chat-container {
+            position: absolute;
+            bottom: 150px;
+            left: 50%;
+            transform: translateX(-50%);
+            display: flex;
+            align-items: flex-start;
+            gap: 25px;
+            width: 80%;
+            max-width: 1536px;
+        }
+
+        #avatar-wrapper {
+            position: relative;
+            width: 180px;
+            height: 180px;
+            flex-shrink: 0;
+        }
+
+        #avatar {
+            width: 180px;
+            height: 180px;
+            border-radius: 50%;
+            object-fit: cover;
+            position: relative;
+            z-index: 3;
+        }
+
+        #avatar-wrapper::before {
+            content: '';
+            position: absolute;
+            top: -8px;
+            left: -8px;
+            right: -8px;
+            bottom: -8px;
+            border-radius: 50%;
+            background-color: var(--name-bg-color);
+            z-index: 1;
+        }
+
+        #avatar-wrapper::after {
+            content: '';
+            position: absolute;
+            top: -4px;
+            left: -4px;
+            right: -4px;
+            bottom: -4px;
+            border-radius: 50%;
+            background-color: var(--message-bg-color);
+            z-index: 2;
+        }
+
+        #message-wrapper {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            flex: 1;
+            min-width: 0;
+        }
+
+        #name-box {
+            padding: 15px 30px;
+            border-radius: 12px 12px 0 0;
+            font-size: 36px;
+            font-weight: 600;
+            white-space: nowrap;
+            position: relative;
+            z-index: 2;
+            margin-bottom: -8px;
+        }
+
+        #message-box {
+            padding: 25px 30px;
+            padding-top: 35px;
+            border-radius: 0 12px 12px 12px;
+            font-size: 48px;
+            font-weight: 600;
+            line-height: 1.4;
+            word-wrap: break-word;
+            position: relative;
+            z-index: 1;
+            width: 100%;
+        }
+
+        /* Vertical Canvas Adjustments (1080x1920) */
+        @media (max-aspect-ratio: 9/16) {
+            body {
+                width: 1080px;
+                height: 1920px;
+            }
+
+            #chat-container {
+                bottom: 100px;
+                width: 90%;
+                max-width: 972px;
+                gap: 20px;
+            }
+
+            #avatar-wrapper {
+                width: 120px;
+                height: 120px;
+            }
+
+            #avatar {
+                width: 120px;
+                height: 120px;
+            }
+
+            #avatar-wrapper::before {
+                top: -6px;
+                left: -6px;
+                right: -6px;
+                bottom: -6px;
+            }
+
+            #avatar-wrapper::after {
+                top: -3px;
+                left: -3px;
+                right: -3px;
+                bottom: -3px;
+            }
+
+            #name-box {
+                padding: 12px 24px;
+                font-size: 28px;
+                margin-bottom: -6px;
+            }
+
+            #message-box {
+                padding: 20px 24px;
+                padding-top: 28px;
+                font-size: 36px;
+                line-height: 1.5;
+            }
+        }
+
+        /* Extra small vertical adjustment for very long messages */
+        @media (max-aspect-ratio: 9/16) and (max-width: 1080px) {
+            #message-box {
+                font-size: 32px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div id="chat-container"></div>
+
+    <script>
+        const container = document.getElementById('chat-container');
+        
+        // Read URL parameters
+        const urlParams = new URLSearchParams(window.location.search);
+        
+        const displayName = urlParams.get('name') || 'The Wolf Pack Mentors';
+        const chatMessage = urlParams.get('msg') || 'You can survive as a Lone Wolf, but you can only thrive with The Pack.';
+        const avatarUrl = urlParams.get('avatar') || 'https://storage.googleapis.com/msgsndr/vMVl7WGukcfSGngLflNN/media/692003b21cda375a7fdf87a3.png';
+        const nameBg = urlParams.get('nameBg') || '#ffe6a7';
+        const nameColor = urlParams.get('nameColor') || '#000000';
+        const msgBg = urlParams.get('msgBg') || '#432818';
+        const msgColor = urlParams.get('msgColor') || '#ffffff';
+        
+        // Build overlay with DOM methods — textContent prevents HTML injection from URL params
+        const FALLBACK_AVATAR = 'https://storage.googleapis.com/msgsndr/vMVl7WGukcfSGngLflNN/media/692003b21cda375a7fdf87a3.png';
+
+        const avatarWrapper = document.createElement('div');
+        avatarWrapper.id = 'avatar-wrapper';
+        const avatarImg = document.createElement('img');
+        avatarImg.id = 'avatar';
+        avatarImg.alt = 'Avatar';
+        avatarImg.src = /^https?:\/\//i.test(avatarUrl) ? avatarUrl : FALLBACK_AVATAR;
+        avatarImg.onerror = function() { this.src = FALLBACK_AVATAR; };
+        avatarWrapper.appendChild(avatarImg);
+
+        const messageWrapper = document.createElement('div');
+        messageWrapper.id = 'message-wrapper';
+
+        const nameBox = document.createElement('div');
+        nameBox.id = 'name-box';
+        nameBox.textContent = displayName;
+
+        const messageBox = document.createElement('div');
+        messageBox.id = 'message-box';
+        messageBox.textContent = chatMessage;
+
+        messageWrapper.appendChild(nameBox);
+        messageWrapper.appendChild(messageBox);
+        container.appendChild(avatarWrapper);
+        container.appendChild(messageWrapper);
+        
+        nameBox.style.backgroundColor = nameBg;
+        nameBox.style.color = nameColor;
+        messageBox.style.backgroundColor = msgBg;
+        messageBox.style.color = msgColor;
+        
+        document.documentElement.style.setProperty('--name-bg-color', nameBg);
+        document.documentElement.style.setProperty('--message-bg-color', msgBg);
+        
+        console.log('[Fake Chat] Overlay rendered and ready for OBS transitions');
+    </script>
+</body>
+</html>

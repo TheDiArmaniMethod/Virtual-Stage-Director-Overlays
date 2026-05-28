@@ -1,0 +1,172 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.7.6 -->
+<html>
+<head>
+    <meta charset="utf-8">
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            width: 1920px;
+            height: 1080px;
+            background: transparent;
+            font-family: 'Arial Black', Arial, sans-serif;
+            overflow: hidden;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        
+        #timer-container {
+            background: rgba(0, 0, 0, 0.8);
+            border-radius: 30px;
+            padding: 60px 100px;
+            border: 5px solid rgba(255, 255, 255, 0.3);
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
+            backdrop-filter: blur(10px);
+            transition: all 0.3s ease;
+        }
+        
+        #timer-display {
+            font-size: 180px;
+            font-weight: bold;
+            color: #ffffff;
+            text-align: center;
+            text-shadow: 0 0 30px rgba(255, 255, 255, 0.5),
+                         0 0 60px rgba(255, 255, 255, 0.3);
+            letter-spacing: 10px;
+            font-variant-numeric: tabular-nums;
+        }
+        
+        /* Fade out animation */
+        @keyframes fadeOut {
+            from {
+                opacity: 1;
+                transform: scale(1);
+            }
+            to {
+                opacity: 0;
+                transform: scale(0.8);
+            }
+        }
+        
+        .fade-out {
+            animation: fadeOut 0.5s ease-out forwards;
+        }
+    </style>
+</head>
+<body>
+    <div id="timer-container">
+        <div id="timer-display">00:00</div>
+    </div>
+
+    <script>
+        // Parse URL parameters
+        function getUrlParameter(name) {
+            const urlParams = new URLSearchParams(window.location.search);
+            const value = urlParams.get(name);
+            console.log('URL Parameter', name, '=', value); // Debug log
+            return value;
+        }
+        
+        // Get minutes and seconds from URL
+        const minutesParam = getUrlParameter('minutes');
+        const secondsParam = getUrlParameter('seconds');
+        
+        const startMinutes = minutesParam !== null ? parseInt(minutesParam) : 5; // Default 5 minutes if not specified
+        const startSeconds = secondsParam !== null ? parseInt(secondsParam) : 0;
+        
+        console.log('Start Minutes:', startMinutes);
+        console.log('Start Seconds:', startSeconds);
+        
+        // Calculate total seconds
+        let totalSeconds = (startMinutes * 60) + startSeconds;
+        let remainingSeconds = totalSeconds;
+        
+        console.log('Total Seconds:', totalSeconds);
+        
+        // Prevent immediate hide if no time specified
+        if (totalSeconds <= 0) {
+            totalSeconds = 300; // Default to 5 minutes
+            remainingSeconds = 300;
+            console.log('No time specified, defaulting to 5 minutes');
+        }
+        
+        // Get custom colors if provided
+        const bgColor = getUrlParameter('bg') || '000000';
+        const textColor = getUrlParameter('text') || 'ffffff';
+        
+        // Apply custom colors
+        const container = document.getElementById('timer-container');
+        const display = document.getElementById('timer-display');
+        
+        container.style.background = `rgba(${parseInt(bgColor.substr(0,2), 16)}, ${parseInt(bgColor.substr(2,2), 16)}, ${parseInt(bgColor.substr(4,2), 16)}, 0.8)`;
+        
+        // Format time as MM:SS
+        function formatTime(seconds) {
+            const mins = Math.floor(seconds / 60);
+            const secs = seconds % 60;
+            return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
+        }
+        
+        // Update display
+        function updateDisplay() {
+            display.textContent = formatTime(remainingSeconds);
+        }
+        
+        // Hide timer with fade out
+        function hideTimer() {
+            console.log('Timer reached zero - hiding');
+            container.classList.add('fade-out');
+            setTimeout(function() {
+                document.body.style.display = 'none';
+            }, 500);
+        }
+        
+        // Countdown logic
+        let timerInterval;
+        
+        function countdown() {
+            console.log('Countdown tick:', remainingSeconds);
+            if (remainingSeconds > 0) {
+                remainingSeconds--;
+                updateDisplay();
+            } else {
+                // Timer reached zero - hide automatically
+                clearInterval(timerInterval);
+                hideTimer();
+            }
+        }
+        
+        // Initialize display
+        updateDisplay();
+        
+        // Start countdown immediately after a brief delay
+        setTimeout(function() {
+            console.log('Starting countdown');
+            timerInterval = setInterval(countdown, 1000);
+        }, 100);
+        
+        // Optional: Add keyboard controls for testing
+        // Press 'r' to reset, 'p' to pause/resume
+        let isPaused = false;
+        document.addEventListener('keydown', function(e) {
+            if (e.key === 'r') {
+                remainingSeconds = totalSeconds;
+                updateDisplay();
+            } else if (e.key === 'p') {
+                if (isPaused) {
+                    timerInterval = setInterval(countdown, 1000);
+                } else {
+                    clearInterval(timerInterval);
+                }
+                isPaused = !isPaused;
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,196 @@
+<!DOCTYPE html>
+<!--
+	Virtual Stage Director v1.6.7.6
+
+	- Full rewrite: loads once, connects directly to OBS WebSocket
+	- Next/Prev navigation via BroadcastCustomEvent — no page reloads, full slide animations
+	- Supports up to 15 messages
+
+-->
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=1920, height=1080">
+	<title>News Ticker Overlay</title>
+	<style>
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+
+		body {
+			width: 1920px;
+			height: 1080px;
+			overflow: hidden;
+			background: transparent;
+			font-family: 'Arial', sans-serif;
+		}
+
+		#panel {
+			position: fixed;
+			width: 1536px;
+			bottom: 100px;
+			left: 1920px; /* off-screen until JS positions it */
+			background: rgba(20, 20, 20, 0.92); /* overridden by JS */
+			border-left: 10px solid #FFD93D;     /* overridden by JS */
+			border-radius: 12px;
+			padding: 44px 56px;
+			box-shadow: 0 8px 48px rgba(0, 0, 0, 0.55);
+			overflow: hidden;
+		}
+
+		#message-text {
+			color: #FFFFFF; /* overridden by JS */
+			font-size: 38px; /* overridden by JS */
+			font-weight: 600;
+			line-height: 1.45;
+			white-space: pre-wrap;
+			word-break: break-word;
+			text-shadow: 1px 1px 4px rgba(0, 0, 0, 0.45);
+		}
+
+		#counter {
+			position: absolute;
+			top: 14px;
+			right: 22px;
+			font-size: 20px;
+			font-weight: 500;
+			color: rgba(255, 255, 255, 0.45);
+			font-family: 'Arial', sans-serif;
+		}
+	</style>
+</head>
+<body>
+
+	<div id="panel">
+		<div id="counter"></div>
+		<div id="message-text"></div>
+	</div>
+
+<script>
+// ============================================================================
+// NEWS TICKER OVERLAY
+// All messages are baked into the URL on Show and stored in a JS array.
+// Next / Prev are handled entirely client-side via obsSourceCustomEvent —
+// no URL changes, no page reloads, full animation control.
+// ============================================================================
+
+function init() {
+	const params = new URLSearchParams(window.location.search);
+
+	// ── Read all messages from URL params ────────────────────────────────────
+	const messages = [];
+	for (let i = 0; i < 15; i++) {
+		const m = params.get('msg' + i);
+		if (m && m.trim()) messages.push(m);
+	}
+
+	if (messages.length === 0) return;
+
+	// ── Apply appearance ─────────────────────────────────────────────────────
+	const panelBgHex = (params.get('panelBg') || '#141414').replace('#', '');
+	const opacity    = Math.min(1, Math.max(0, parseFloat(params.get('panelOpacity') || '0.92')));
+	const r = parseInt(panelBgHex.substring(0, 2), 16) || 20;
+	const g = parseInt(panelBgHex.substring(2, 4), 16) || 20;
+	const b = parseInt(panelBgHex.substring(4, 6), 16) || 20;
+
+	const panel     = document.getElementById('panel');
+	const messageEl = document.getElementById('message-text');
+	const counterEl = document.getElementById('counter');
+
+	panel.style.background   = 'rgba(' + r + ',' + g + ',' + b + ',' + opacity.toFixed(2) + ')';
+	panel.style.borderColor  = params.get('accentColor') || '#FFD93D';
+	messageEl.style.color    = params.get('textColor')   || '#FFFFFF';
+	messageEl.style.fontSize = (params.get('fontSize')   || '38') + 'px';
+
+	// ── Helpers ───────────────────────────────────────────────────────────────
+	var currentIndex = 0;
+	var animating    = false;
+
+	function showMessage(idx) {
+		messageEl.textContent = messages[idx] || '';
+		counterEl.textContent = messages.length > 1 ? (idx + 1) + ' / ' + messages.length : '';
+	}
+
+	function slidePanel(fromLeft, toLeft, duration, onComplete) {
+		panel.style.transition = 'none';
+		panel.style.left = fromLeft;
+		requestAnimationFrame(function() {
+			requestAnimationFrame(function() {
+				panel.style.transition = 'left ' + duration + 's cubic-bezier(0.25, 0.46, 0.45, 0.94)';
+				panel.style.left = toLeft;
+				if (onComplete) {
+					setTimeout(onComplete, duration * 1000);
+				}
+			});
+		});
+	}
+
+	// ── Initial show: slide in from the right ────────────────────────────────
+	showMessage(0);
+	slidePanel('1920px', '192px', 0.65, null);
+
+	// ── Navigation via OBS WebSocket BroadcastCustomEvent ────────────────────
+	// plugin.js calls BroadcastCustomEvent; the overlay connects directly to
+	// OBS WebSocket and listens. No dependency on obs-browser plugin version.
+	(function() {
+		var ws;
+
+		function connect() {
+			ws = new WebSocket('ws://127.0.0.1:4455');
+
+			ws.onmessage = function(evt) {
+				var msg = JSON.parse(evt.data);
+
+				// OBS WebSocket v5 handshake: Hello (op 0) → Identify (op 1)
+				if (msg.op === 0) {
+					ws.send(JSON.stringify({
+						op: 1,
+						d: { rpcVersion: 1, eventSubscriptions: 1 }
+					}));
+					return;
+				}
+
+				// op 5 = event; CustomEvent carries BroadcastCustomEvent payloads
+				if (msg.op !== 5 || msg.d.eventType !== 'CustomEvent') return;
+
+				var data = msg.d.eventData;
+				if (!data || data.type !== 'carousel_navigate') return;
+				if (animating) return;
+
+				var direction = data.direction;
+				var newIndex  = data.index;
+				if (newIndex < 0 || newIndex >= messages.length) return;
+
+				animating = true;
+
+				var exitLeft  = direction === 'next' ? '-1536px' : '1920px';
+				var enterFrom = direction === 'next' ? '1920px'  : '-1536px';
+
+				slidePanel('192px', exitLeft, 0.4, function() {
+					currentIndex = newIndex;
+					showMessage(currentIndex);
+					slidePanel(enterFrom, '192px', 0.65, function() {
+						animating = false;
+					});
+				});
+			};
+
+			ws.onerror = function() { setTimeout(connect, 2000); };
+			ws.onclose = function() { setTimeout(connect, 2000); };
+		}
+
+		connect();
+	})();
+}
+
+if (document.readyState === 'loading') {
+	document.addEventListener('DOMContentLoaded', init);
+} else {
+	init();
+}
+</script>
+
+</body>
+</html>

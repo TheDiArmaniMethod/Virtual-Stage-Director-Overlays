@@ -1,0 +1,304 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.7.6 -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1920px;height:1080px;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}
+
+/* ── Instruction banner ─────────────────────────────── */
+#banner{
+  position:absolute;
+  left:150px;
+  bottom:150px;
+  background:var(--bg-color);
+  border-radius:20px;
+  padding:32px 60px;
+  display:flex;align-items:center;gap:28px;
+  border:3px solid rgba(255,255,255,0.3);
+  box-shadow:0 10px 40px rgba(0,0,0,0.3);
+  backdrop-filter:blur(10px);
+  animation:fadeInDown 0.6s ease-out;
+  white-space:nowrap;
+}
+#banner-icon{font-size:56px}
+#banner-text{color:#fff}
+#banner-headline{font-size:48px;font-weight:700;text-shadow:2px 2px 8px rgba(0,0,0,0.3);margin-bottom:8px}
+#banner-sub{font-size:30px;opacity:0.92;text-shadow:1px 1px 4px rgba(0,0,0,0.2)}
+
+/* ── Simulated Zoom Participants panel ──────────────── */
+#zoom-participants{
+  position:absolute;
+  right:100px;
+  bottom:150px;
+  width:480px;
+  background:#fff;
+  border-radius:16px;
+  overflow:hidden;
+  box-shadow:0 20px 60px rgba(0,0,0,0.4);
+  animation:fadeInRight 0.7s ease-out;
+}
+
+/* Panel header */
+#panel-header{
+  background:#f5f5f5;
+  padding:18px 24px;
+  display:flex;align-items:center;justify-content:space-between;
+  border-bottom:1px solid #e0e0e0;
+}
+#panel-title{font-size:22px;font-weight:600;color:#1a1a1a}
+#panel-close{color:#888;font-size:22px;cursor:default}
+#panel-count{font-size:15px;color:#666;background:#e8e8e8;border-radius:20px;padding:3px 12px}
+
+/* Search bar */
+#search-bar{
+  padding:12px 18px;
+  border-bottom:1px solid #e8e8e8;
+}
+#search-input{
+  width:100%;background:#f0f0f0;border:none;border-radius:8px;
+  padding:10px 14px;font-size:16px;color:#666;outline:none;
+  display:flex;align-items:center;gap:8px;
+}
+
+/* Participant list */
+#participant-list{padding:8px 0}
+
+.participant{
+  display:flex;align-items:center;gap:14px;
+  padding:14px 20px;
+  position:relative;
+  transition:background 0.2s;
+}
+.participant.highlighted{background:#f0f7ff}
+.participant.other{opacity:0.55}
+
+.p-avatar{
+  width:44px;height:44px;border-radius:50%;
+  display:flex;align-items:center;justify-content:center;
+  font-size:17px;font-weight:700;color:#fff;flex-shrink:0;
+}
+.p-name{flex:1;font-size:19px;color:#1a1a1a;font-weight:500}
+.p-name .you-label{font-size:13px;color:#0e71eb;font-weight:400;margin-left:6px}
+.p-icons{display:flex;gap:8px;align-items:center}
+.p-icon{width:28px;height:28px;display:flex;align-items:center;justify-content:center;color:#666}
+.p-icon svg{width:18px;height:18px}
+
+/* Pencil/edit icon glowing */
+.edit-btn{
+  width:32px;height:32px;border-radius:50%;
+  background:#0e71eb;display:flex;align-items:center;justify-content:center;
+  animation:editGlow 1.8s ease-in-out infinite;
+  cursor:pointer;
+}
+.edit-btn svg{width:16px;height:16px;stroke:#fff;fill:none;stroke-width:2;stroke-linecap:round;stroke-linejoin:round}
+
+/* Rename button */
+#rename-btn-row{
+  padding:10px 20px 16px;
+  display:flex;gap:10px;
+}
+#rename-btn{
+  background:#0e71eb;color:#fff;
+  border:none;border-radius:8px;
+  padding:12px 28px;font-size:18px;font-weight:600;
+  cursor:pointer;
+  animation:btnPulse 2s ease-in-out infinite;
+  box-shadow:0 4px 16px rgba(14,113,235,0.4);
+}
+#more-btn{
+  background:#f0f0f0;color:#333;
+  border:none;border-radius:8px;
+  padding:12px 20px;font-size:18px;font-weight:500;
+  cursor:pointer;
+}
+
+/* Arrow pointing at rename button */
+#arrow-hint{
+  position:absolute;
+  right:140px;
+  bottom:28px;
+  font-size:36px;
+  animation:arrowBounce 1.5s ease-in-out infinite;
+  color:#0e71eb;
+}
+
+/* ── Rename dialog (overlays participants panel after delay) ──────── */
+#rename-dialog{
+  position:absolute;
+  right:80px;
+  bottom:170px;
+  width:480px;
+  background:#fff;
+  border-radius:16px;
+  box-shadow:0 24px 80px rgba(0,0,0,0.6);
+  padding:36px;
+  opacity:0;
+  z-index:10;
+  animation:showDialog 1s ease-out 2.75s forwards;
+  pointer-events:none;
+}
+#dialog-title{font-size:26px;font-weight:700;color:#1a1a1a;margin-bottom:28px}
+#dialog-label{font-size:16px;color:#666;margin-bottom:8px}
+#dialog-input{
+  width:100%;border:2px solid #0e71eb;border-radius:8px;
+  padding:14px 16px;font-size:20px;color:#1a1a1a;
+  outline:none;margin-bottom:24px;
+  box-shadow:0 0 0 4px rgba(14,113,235,0.15);
+}
+#dialog-buttons{display:flex;gap:12px;justify-content:flex-end}
+#dialog-cancel{
+  background:#f0f0f0;border:none;border-radius:8px;
+  padding:12px 24px;font-size:17px;color:#333;cursor:pointer;
+}
+#dialog-ok{
+  background:#0e71eb;border:none;border-radius:8px;
+  padding:12px 28px;font-size:17px;font-weight:600;color:#fff;cursor:pointer;
+}
+
+/* Participants panel stays visible — dialog overlays it */
+#zoom-participants{animation:fadeInRight 0.7s ease-out}
+
+/* ── Animations ─────────────────────────────────────── */
+@keyframes fadeInDown{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+@keyframes fadeInRight{from{opacity:0;transform:translateX(30px)}to{opacity:1;transform:translateX(0)}}
+@keyframes editGlow{0%,100%{box-shadow:0 0 0 0 rgba(14,113,235,0.4)}50%{box-shadow:0 0 0 8px rgba(14,113,235,0)}}
+@keyframes btnPulse{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
+@keyframes arrowBounce{0%,100%{transform:translateX(0)}50%{transform:translateX(8px)}}
+@keyframes showDialog{from{opacity:0;transform:translateX(10px)}to{opacity:1;transform:translateX(0)}}
+</style>
+  <script>
+    /* ── Brand colour via URL parameter ─────────────────────────────────────
+       Usage: ?bgColor=220901&bgOpacity=95
+       bgColor  : hex colour without # (default: 220901 — brand brown)
+       bgOpacity: 0-100 (default: 95)
+       Examples:
+         Default brand brown : ?bgColor=220901&bgOpacity=95
+         Zoom blue           : ?bgColor=2D8CFF&bgOpacity=95
+         Dark slate          : ?bgColor=14141E&bgOpacity=96
+         Forest green        : ?bgColor=108250&bgOpacity=95
+    ─────────────────────────────────────────────────────────────────────── */
+    (function() {
+      var qs = new URLSearchParams(location.search);
+      var hex = (qs.get('bgColor') || '220901').replace('#', '');
+      var opacity = Math.min(100, Math.max(0, parseFloat(qs.get('bgOpacity') || '95'))) / 100;
+      var r = parseInt(hex.substring(0,2), 16);
+      var g = parseInt(hex.substring(2,4), 16);
+      var b = parseInt(hex.substring(4,6), 16);
+      var rgba = 'rgba(' + r + ',' + g + ',' + b + ',' + opacity.toFixed(2) + ')';
+      document.documentElement.style.setProperty('--bg-color', rgba);
+    })();
+  </script>
+</head>
+<body>
+
+<script>
+// URL params: ?fromName=John%20Smith&toName=John%20Smith%20%7C%20Company
+const p = new URLSearchParams(location.search);
+const fromName = p.get('fromName') || 'iPhone';
+const toName   = p.get('toName')   || 'Your Full Name';
+</script>
+
+<!-- Instruction banner -->
+<div id="banner">
+  <div id="banner-icon">✏️</div>
+  <div id="banner-text">
+    <div id="banner-headline">Please Rename Yourself in Zoom</div>
+    <div id="banner-sub">Hover your name in Participants → click the pencil icon → Rename</div>
+  </div>
+</div>
+
+<!-- Simulated Participants panel -->
+<div id="zoom-participants">
+  <div id="panel-header">
+    <div id="panel-title">Participants</div>
+    <div style="display:flex;align-items:center;gap:12px">
+      <div id="panel-count">12</div>
+      <div id="panel-close">✕</div>
+    </div>
+  </div>
+
+  <div id="search-bar">
+    <div id="search-input" style="display:flex;align-items:center;gap:8px">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+      <span style="color:#999;font-size:16px">Search</span>
+    </div>
+  </div>
+
+  <div id="participant-list">
+
+    <!-- Host -->
+    <div class="participant other">
+      <div class="p-avatar" style="background:#0e71eb">H</div>
+      <div class="p-name">Host (Christopher) <span style="font-size:13px;color:#0e71eb">(Host)</span></div>
+      <div class="p-icons">
+        <div class="p-icon"><svg viewBox="0 0 24 24" fill="#666"><path d="M12 14c2.67 0 8 1.34 8 4v2H4v-2c0-2.66 5.33-4 8-4zm0-2a4 4 0 100-8 4 4 0 000 8z"/></svg></div>
+      </div>
+    </div>
+
+    <!-- YOU — highlighted, showing pencil -->
+    <div class="participant highlighted" id="you-row">
+      <div class="p-avatar" style="background:#f59e0b" id="you-avatar">?</div>
+      <div class="p-name" id="you-name-display">
+        <span id="you-name-text"></span>
+        <span class="you-label">(You)</span>
+      </div>
+      <div class="p-icons">
+        <div class="p-icon">
+          <svg viewBox="0 0 24 24" fill="none" stroke="#666" stroke-width="2"><path d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"/></svg>
+        </div>
+        <div class="edit-btn" title="Rename">
+          <svg viewBox="0 0 24 24"><path d="M11 4H4a2 2 0 00-2 2v14a2 2 0 002 2h14a2 2 0 002-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 013 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+        </div>
+      </div>
+    </div>
+
+    <!-- Others -->
+    <div class="participant other">
+      <div class="p-avatar" style="background:#10b981">S</div>
+      <div class="p-name">Sarah M.</div>
+    </div>
+    <div class="participant other">
+      <div class="p-avatar" style="background:#8b5cf6">R</div>
+      <div class="p-name">Robert K.</div>
+    </div>
+
+  </div>
+
+  <!-- Rename / More buttons -->
+  <div id="rename-btn-row">
+    <button id="rename-btn">Rename</button>
+    <button id="more-btn">More ▾</button>
+  </div>
+</div>
+
+<!-- Rename dialog (appears after delay) -->
+<div id="rename-dialog">
+  <div id="dialog-title">Rename</div>
+  <div id="dialog-label">Enter a new name</div>
+  <input id="dialog-input" type="text" id="to-name-input" readonly>
+  <div id="dialog-buttons">
+    <button id="dialog-cancel">Cancel</button>
+    <button id="dialog-ok">OK</button>
+  </div>
+</div>
+
+<script>
+// Set names from URL params
+const youNameEl  = document.getElementById('you-name-text');
+const avatarEl   = document.getElementById('you-avatar');
+const dialogInpt = document.getElementById('dialog-input');
+
+youNameEl.textContent  = fromName;
+avatarEl.textContent   = fromName.charAt(0).toUpperCase();
+dialogInpt.value       = toName;
+
+// Animate the name changing when dialog "completes"
+setTimeout(() => {
+  // After dialog appears (3.5s) + user "confirms" (2.5s later)
+}, 6000);
+</script>
+
+</body>
+</html>

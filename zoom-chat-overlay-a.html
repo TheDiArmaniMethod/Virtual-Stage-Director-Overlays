@@ -1,0 +1,124 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.7.6 -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1920px;height:1080px;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}
+
+#container{
+  position:absolute;
+  bottom:60px;
+  left:50%;
+  transform:translateX(-50%);
+  width:90%;
+  max-width:1600px;
+  background:var(--bg-color);
+  border-radius:20px;
+  padding:50px;
+  display:flex;align-items:center;justify-content:center;gap:50px;
+  backdrop-filter:blur(10px);
+  border:3px solid rgba(255,255,255,0.3);
+  box-shadow:0 10px 40px rgba(0,0,0,0.3);
+  animation:fadeInUp 0.6s ease-out;
+}
+
+/* Chat icon — animated bubbles */
+#chat-icon{flex-shrink:0;width:130px;height:130px;position:relative}
+.bubble-a{
+  position:absolute;width:90px;height:60px;background:#fff;border-radius:12px 12px 12px 0;
+  bottom:30px;left:0;animation:pulse 2.2s ease-in-out infinite;
+}
+.bubble-b{
+  position:absolute;width:70px;height:48px;background:rgba(255,255,255,0.7);border-radius:12px 12px 0 12px;
+  top:20px;right:0;animation:pulse 2.2s ease-in-out infinite 0.4s;
+}
+.dot-row{position:absolute;bottom:38px;left:14px;display:flex;gap:7px}
+.dot-row span{width:10px;height:10px;background:rgba(45,140,255,0.6);border-radius:50%;animation:typingDot 1.4s ease-in-out infinite}
+.dot-row span:nth-child(2){animation-delay:.2s}
+.dot-row span:nth-child(3){animation-delay:.4s}
+
+#text-content{flex:1;color:#fff}
+#headline{font-size:64px;font-weight:700;margin-bottom:18px;text-shadow:2px 2px 8px rgba(0,0,0,0.3);line-height:1.2}
+#subtext{font-size:40px;font-weight:400;opacity:0.95;text-shadow:1px 1px 4px rgba(0,0,0,0.2);line-height:1.4}
+
+/* Shortcut badge */
+#shortcut{
+  flex-shrink:0;display:flex;flex-direction:column;align-items:center;gap:16px;
+}
+.shortcut-label{font-size:22px;color:rgba(255,255,255,0.8);font-weight:500}
+.keys{display:flex;align-items:center;gap:10px}
+.key{
+  background:rgba(255,255,255,0.2);border:2px solid rgba(255,255,255,0.5);
+  border-radius:10px;padding:10px 18px;
+  font-size:26px;font-weight:700;color:#fff;
+  box-shadow:0 4px 0 rgba(0,0,0,0.2);
+  text-shadow:1px 1px 2px rgba(0,0,0,0.3);
+}
+.plus{font-size:26px;color:rgba(255,255,255,0.7);font-weight:300}
+.platform-row{display:flex;flex-direction:column;gap:10px}
+
+@keyframes fadeInUp{from{opacity:0;transform:translateX(-50%) translateY(20px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+@keyframes pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.04)}}
+@keyframes typingDot{0%,60%,100%{transform:translateY(0)}30%{transform:translateY(-6px)}}
+</style>
+  <script>
+    /* ── Brand colour via URL parameter ─────────────────────────────────────
+       Usage: ?bgColor=220901&bgOpacity=95
+       bgColor  : hex colour without # (default: 220901 — brand brown)
+       bgOpacity: 0-100 (default: 95)
+       Examples:
+         Default brand brown : ?bgColor=220901&bgOpacity=95
+         Zoom blue           : ?bgColor=2D8CFF&bgOpacity=95
+         Dark slate          : ?bgColor=14141E&bgOpacity=96
+         Forest green        : ?bgColor=108250&bgOpacity=95
+    ─────────────────────────────────────────────────────────────────────── */
+    (function() {
+      var qs = new URLSearchParams(location.search);
+      var hex = (qs.get('bgColor') || '220901').replace('#', '');
+      var opacity = Math.min(100, Math.max(0, parseFloat(qs.get('bgOpacity') || '95'))) / 100;
+      var r = parseInt(hex.substring(0,2), 16);
+      var g = parseInt(hex.substring(2,4), 16);
+      var b = parseInt(hex.substring(4,6), 16);
+      var rgba = 'rgba(' + r + ',' + g + ',' + b + ',' + opacity.toFixed(2) + ')';
+      document.documentElement.style.setProperty('--bg-color', rgba);
+    })();
+  </script>
+</head>
+<body>
+<div id="container">
+  <div id="chat-icon">
+    <div class="bubble-b"></div>
+    <div class="bubble-a">
+      <div class="dot-row">
+        <span></span><span></span><span></span>
+      </div>
+    </div>
+  </div>
+
+  <div id="text-content">
+    <div id="headline">Please Open Zoom Chat</div>
+    <div id="subtext">Type your questions and comments there — we read everything!</div>
+  </div>
+
+  <div id="shortcut">
+    <div class="shortcut-label">Keyboard Shortcut</div>
+    <div class="platform-row">
+      <div>
+        <div class="shortcut-label" style="font-size:18px;margin-bottom:6px">Windows</div>
+        <div class="keys">
+          <div class="key">Alt</div><div class="plus">+</div><div class="key">H</div>
+        </div>
+      </div>
+      <div>
+        <div class="shortcut-label" style="font-size:18px;margin-bottom:6px">Mac</div>
+        <div class="keys">
+          <div class="key">⌘</div><div class="plus">+</div><div class="key">⇧</div><div class="plus">+</div><div class="key">H</div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+</body>
+</html>

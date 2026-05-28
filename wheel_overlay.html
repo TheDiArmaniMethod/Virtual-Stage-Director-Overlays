@@ -1,0 +1,615 @@
+﻿<!DOCTYPE html>
+<!-- 
+	Virtual Stage Director v1.6.8.1
+	- Removed hash-based spin trigger; connects to OBS WebSocket for wheel_spin events
+	- Winner banner repositioned to centre of visible wheel half (top: 830px)
+	- Clears previous spin banner and confetti on new spin
+	- FIXED: wheel_overlay.html has no reconnect logic — if the OBS WebSocket drops and reconnects, the standard overlay loses its wheel_spin listener permanently.
+ -->
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=1920, height=1080">
+	<title>Raffle Roulette Wheel V4</title>
+	<style>
+		* {
+			margin: 0;
+			padding: 0;
+			box-sizing: border-box;
+		}
+		
+		body {
+			width: 1920px;
+			height: 1080px;
+			overflow: hidden;
+			background: transparent;
+			font-family: 'Arial', sans-serif;
+		}
+		
+		/* Wheel Container - positioned at bottom edge */
+		#wheelContainer {
+			position: fixed;
+			left: 460px;  /* (1920 - 1000) / 2 */
+			top: 580px;   /* 1080 - 500 (half of wheel) */
+			width: 1000px;
+			height: 1000px;
+			transform-origin: center center;
+		}
+		
+		/* Canvas for wheel */
+		#wheelCanvas {
+			width: 100%;
+			height: 100%;
+			display: block;
+		}
+		
+		/* Pointer - positioned at top of wheel */
+		#pointer {
+			position: absolute;
+			left: 50%;
+			top: -20px;
+			transform: translateX(-50%);
+			width: 0;
+			height: 0;
+			border-left: 25px solid transparent;
+			border-right: 25px solid transparent;
+			border-top: 40px solid #FFD93D;
+			z-index: 100;
+			filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
+		}
+		
+		/* Winner Banner - centred over the visible half of the wheel (top: 580px + 250px = 830px) */
+		#winnerBanner {
+			position: fixed;
+			left: 50%;
+			top: 830px;
+			transform: translate(-50%, -50%) scale(0);
+			background: #6C5CE7;
+			color: #FFFFFF;
+			padding: 40px 80px;
+			border-radius: 20px;
+			font-size: 48px;
+			font-weight: bold;
+			text-align: center;
+			z-index: 200;
+			box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+			opacity: 0;
+			min-width: 400px;
+		}
+		
+		#winnerBanner.show {
+			animation: bannerPop 0.5s cubic-bezier(0.68, -0.55, 0.265, 1.55) forwards;
+		}
+		
+		@keyframes bannerPop {
+			0% {
+				transform: translate(-50%, -50%) scale(0);
+				opacity: 0;
+			}
+			100% {
+				transform: translate(-50%, -50%) scale(1);
+				opacity: 1;
+			}
+		}
+		
+		#winnerBanner .title {
+			font-size: 32px;
+			margin-bottom: 15px;
+			opacity: 0.9;
+		}
+		
+		#winnerBanner .name {
+			font-size: 56px;
+			font-weight: bold;
+		}
+		
+		/* Confetti */
+		.confetti {
+			position: fixed;
+			width: 10px;
+			height: 10px;
+			z-index: 150;
+			pointer-events: none;
+		}
+	</style>
+</head>
+<body>
+
+	<div id="wheelContainer">
+		<div id="pointer"></div>
+		<canvas id="wheelCanvas"></canvas>
+	</div>
+	
+	<div id="winnerBanner">
+		<div class="title">🎉 WINNER 🎉</div>
+		<div class="name" id="winnerName">Winner Name</div>
+	</div>
+
+<script>
+// ============================================================================
+// RAFFLE ROULETTE WHEEL OVERLAY V4
+// URL params for initial load + URL hash (#spin:WinnerName:timestamp) for spin commands
+// ============================================================================
+
+const wheelState = {
+	canvas: null,
+	ctx: null,
+	rotation: 0,
+	isSpinning: false,
+	targetRotation: 0,
+	spinStartRotation: 0,
+	spinStartTime: 0,
+	spinDuration: 5000,
+	bannerDuration: 5000,
+	idleRotationSpeed: 18, // degrees per second
+	lastFrameTime: 0,
+	names: [],
+	settings: null,
+	audioContext: null,
+	clickInterval: null,
+	lastClickSegment: -1,
+	hasSpunOnce: false  // <-- ADD THIS LINE
+};
+
+/**
+ * Initialize the wheel
+ */
+function init() {
+	wheelState.canvas = document.getElementById('wheelCanvas');
+	wheelState.ctx = wheelState.canvas.getContext('2d');
+	
+	// Set canvas resolution
+	wheelState.canvas.width = 1000;
+	wheelState.canvas.height = 1000;
+	
+	// Load settings from URL parameters
+	loadSettingsFromURL();
+	
+	// Connect to OBS WebSocket and listen for spin commands.
+	// Reconnects automatically if OBS drops and restarts — matches fullscreen variant.
+	(function() {
+		function connect() {
+			var ws = new WebSocket('ws://127.0.0.1:4455');
+			ws.onmessage = function(evt) {
+				var msg = JSON.parse(evt.data);
+				if (msg.op === 0) {
+					ws.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
+					return;
+				}
+				if (msg.op !== 5 || msg.d.eventType !== 'CustomEvent') return;
+				var data = msg.d.eventData;
+				if (!data || data.type !== 'wheel_spin') return;
+				if (wheelState.isSpinning) return;
+				spinWheel(data.winner || null);
+			};
+			ws.onerror = function() { setTimeout(connect, 2000); };
+			ws.onclose = function() { setTimeout(connect, 2000); };
+		}
+		connect();
+	})();
+
+	// Start animation loop
+	wheelState.lastFrameTime = Date.now();
+	requestAnimationFrame(animate);
+	
+	console.log('[Wheel Overlay V4] Initialized with', wheelState.names.length, 'names');
+}
+
+/**
+ * Load settings from URL parameters
+ */
+function loadSettingsFromURL() {
+	const params = new URLSearchParams(window.location.search);
+	
+	// Get names and parse
+	const namesStr = params.get('names') || '';
+	wheelState.names = namesStr.split('\n').filter(n => n.trim()).slice(0, 60);
+	
+	// Get settings
+	wheelState.settings = {
+		selectionMode: params.get('selectionMode') || 'random',
+		segmentColor1: params.get('segmentColor1') || '#FF6B6B',
+		segmentColor2: params.get('segmentColor2') || '#4ECDC4',
+		wheelTextColor: params.get('wheelTextColor') || '#FFFFFF',
+		pointerColor: params.get('pointerColor') || '#FFD93D',
+		bannerBgColor: params.get('bannerBgColor') || '#6C5CE7',
+		bannerTextColor: params.get('bannerTextColor') || '#FFFFFF',
+		spinDuration: parseInt(params.get('spinDuration') || '5'),
+		bannerDuration: parseInt(params.get('bannerDuration') || '5')
+	};
+	
+	wheelState.spinDuration = wheelState.settings.spinDuration * 1000;
+	wheelState.bannerDuration = wheelState.settings.bannerDuration * 1000;
+	
+	// Update pointer color
+	document.getElementById('pointer').style.borderTopColor = wheelState.settings.pointerColor;
+	
+	// Update banner colors
+	const banner = document.getElementById('winnerBanner');
+	banner.style.background = wheelState.settings.bannerBgColor;
+	banner.style.color = wheelState.settings.bannerTextColor;
+	
+	console.log('[Wheel Overlay] Loaded', wheelState.names.length, 'names from URL');
+	console.log('[Wheel Overlay] Settings:', wheelState.settings);
+}
+
+/**
+ * Spin the wheel to land on winner
+ * FINAL CORRECT VERSION
+ */
+function spinWheel(winner) {
+	if (wheelState.names.length === 0) {
+		console.error('[Wheel Overlay] No names configured');
+		return;
+	}
+
+	// Clean up any previous spin's banner and confetti
+	hideWinnerBanner();
+	document.querySelectorAll('.confetti').forEach(function(el) { el.remove(); });
+	
+	// Find winner index
+	let targetWinnerIndex = 0;
+	if (winner) {
+		targetWinnerIndex = wheelState.names.indexOf(winner);
+		if (targetWinnerIndex === -1) {
+			console.warn('[Wheel Overlay] Winner not found in list, using random');
+			targetWinnerIndex = Math.floor(Math.random() * wheelState.names.length);
+		}
+	} else {
+		targetWinnerIndex = Math.floor(Math.random() * wheelState.names.length);
+	}
+	
+	console.log('[Wheel Overlay] Target winner:', wheelState.names[targetWinnerIndex], 'at index', targetWinnerIndex);
+	
+	// Calculate rotation to land on this winner
+	const anglePerSegment = 360 / wheelState.names.length;
+	
+	// Add 5-8 full rotations for drama — MUST be a whole number so the
+	// fractional remainder doesn't offset the landing segment
+	const extraRotations = 5 + Math.floor(Math.random() * 4); // 5, 6, 7, or 8
+	
+	// Centre of segment i is at (i + 0.5) * anglePerSegment.
+	// Random offset within middle 60% of segment (-0.3 to +0.3) for natural variation,
+	// never close enough to a boundary to land on the wrong segment.
+	const intraSegment = (Math.random() - 0.5) * 0.6; // -0.3 to +0.3
+	const targetRotation = (extraRotations * 360) + ((targetWinnerIndex + 0.5 + intraSegment) * anglePerSegment);
+	
+	// targetRotation is absolute (from 0), spinStart is current visual position
+	wheelState.targetRotation = targetRotation;
+	wheelState.spinStartRotation = wheelState.rotation;
+	wheelState.isSpinning = true;
+	wheelState.spinStartTime = Date.now();
+	wheelState.hasSpunOnce = true;
+	
+	console.log('[Wheel Overlay] Will rotate by:', targetRotation, 'degrees');
+	
+	// Start click sounds
+	startClickSounds();
+	
+	// Schedule winner banner - show AFTER wheel stops
+	// Use the pre-determined winner directly — avoids floating-point rotation re-derivation
+	const confirmedWinner = wheelState.names[targetWinnerIndex];
+	setTimeout(function() {
+		showWinnerBanner(confirmedWinner);
+		stopClickSounds();
+		
+		// Hide banner after duration
+		setTimeout(function() {
+			hideWinnerBanner();
+		}, wheelState.bannerDuration);
+		
+	}, wheelState.spinDuration);
+}
+
+/**
+ * Show winner banner with confetti
+ */
+function showWinnerBanner(name) {
+	const banner = document.getElementById('winnerBanner');
+	document.getElementById('winnerName').textContent = name;
+	banner.classList.add('show');
+	
+	// Create confetti
+	createConfetti();
+}
+
+/**
+ * Hide winner banner
+ */
+function hideWinnerBanner() {
+	const banner = document.getElementById('winnerBanner');
+	banner.classList.remove('show');
+}
+
+/**
+ * Create confetti explosion
+ */
+function createConfetti() {
+	const banner = document.getElementById('winnerBanner');
+	const bannerRect = banner.getBoundingClientRect();
+	
+	// Get colors from settings
+	const colors = [
+		wheelState.settings.segmentColor1,
+		wheelState.settings.segmentColor2,
+		wheelState.settings.pointerColor,
+		'#FF6B6B',
+		'#4ECDC4',
+		'#FFD93D',
+		'#95E1D3',
+		'#F38181'
+	];
+	
+	// Create confetti from left side
+	for (let i = 0; i < 50; i++) {
+		createConfettiParticle(bannerRect.left, bannerRect.top + bannerRect.height / 2, -1, colors);
+	}
+	
+	// Create confetti from right side
+	for (let i = 0; i < 50; i++) {
+		createConfettiParticle(bannerRect.right, bannerRect.top + bannerRect.height / 2, 1, colors);
+	}
+}
+
+/**
+ * Create single confetti particle
+ */
+function createConfettiParticle(x, y, direction, colors) {
+	const confetti = document.createElement('div');
+	confetti.className = 'confetti';
+	confetti.style.left = x + 'px';
+	confetti.style.top = y + 'px';
+	confetti.style.background = colors[Math.floor(Math.random() * colors.length)];
+	
+	document.body.appendChild(confetti);
+	
+	// Random velocity
+	const vx = direction * (Math.random() * 5 + 3);
+	const vy = -(Math.random() * 8 + 5);
+	const gravity = 0.3;
+	const rotation = Math.random() * 360;
+	const rotationSpeed = (Math.random() - 0.5) * 10;
+	
+	let posX = x;
+	let posY = y;
+	let velX = vx;
+	let velY = vy;
+	let currentRotation = rotation;
+	let opacity = 1;
+	
+	const duration = wheelState.bannerDuration;
+	const startTime = Date.now();
+	
+	function animateConfetti() {
+		const elapsed = Date.now() - startTime;
+		
+		if (elapsed > duration) {
+			confetti.remove();
+			return;
+		}
+		
+		// Physics
+		velY += gravity;
+		posX += velX;
+		posY += velY;
+		currentRotation += rotationSpeed;
+		
+		// Fade out near end
+		if (elapsed > duration * 0.7) {
+			opacity = 1 - ((elapsed - duration * 0.7) / (duration * 0.3));
+		}
+		
+		confetti.style.left = posX + 'px';
+		confetti.style.top = posY + 'px';
+		confetti.style.transform = 'rotate(' + currentRotation + 'deg)';
+		confetti.style.opacity = opacity;
+		
+		requestAnimationFrame(animateConfetti);
+	}
+	
+	requestAnimationFrame(animateConfetti);
+}
+
+/**
+ * Animation loop
+ */
+function animate() {
+	const now = Date.now();
+	const deltaTime = (now - wheelState.lastFrameTime) / 1000;
+	wheelState.lastFrameTime = now;
+	
+	if (wheelState.isSpinning) {
+		// Spinning animation — interpolate directly from spinStartRotation to targetRotation
+		const elapsed = now - wheelState.spinStartTime;
+		const progress = Math.min(elapsed / wheelState.spinDuration, 1);
+		
+		// Ease out quintic — smooth deceleration
+		const eased = 1 - Math.pow(1 - progress, 5);
+		
+		wheelState.rotation = wheelState.spinStartRotation + (wheelState.targetRotation - wheelState.spinStartRotation) * eased;
+		
+		// Stop spinning when complete — snap exactly to target
+		if (progress >= 1) {
+			wheelState.rotation = wheelState.targetRotation % 360; // clean reset, no residual
+			wheelState.isSpinning = false;
+		}
+	} else if (!wheelState.hasSpunOnce) {
+		// Idle rotation (only BEFORE first spin)
+		wheelState.rotation += wheelState.idleRotationSpeed * deltaTime;
+		wheelState.rotation = wheelState.rotation % 360;
+	}
+	// After spinning, wheel stays stopped at winner position
+	
+	// Draw wheel
+	drawWheel();
+	
+	requestAnimationFrame(animate);
+}
+
+/**
+ * Draw the wheel
+ */
+function drawWheel() {
+	const ctx = wheelState.ctx;
+	const canvas = wheelState.canvas;
+	const centerX = canvas.width / 2;
+	const centerY = canvas.height / 2;
+	const radius = 480;
+	
+	// Clear canvas
+	ctx.clearRect(0, 0, canvas.width, canvas.height);
+	
+	if (wheelState.names.length === 0) return;
+	
+	// Save context
+	ctx.save();
+	
+	// Rotate canvas
+	ctx.translate(centerX, centerY);
+	ctx.rotate((wheelState.rotation * Math.PI) / 180);
+	ctx.translate(-centerX, -centerY);
+	
+	// Draw segments starting from TOP, going COUNTER-CLOCKWISE
+	const anglePerSegment = (2 * Math.PI) / wheelState.names.length;
+	const startOffset = (3 * Math.PI) / 2; // 270 degrees in radians = TOP
+	
+	for (let i = 0; i < wheelState.names.length; i++) {
+		// Going counter-clockwise: subtract instead of add
+		const startAngle = startOffset - (i * anglePerSegment);
+		const endAngle = startOffset - ((i + 1) * anglePerSegment);
+		
+		// Determine color
+		const color = i % 2 === 0 ? wheelState.settings.segmentColor1 : wheelState.settings.segmentColor2;
+		
+		// Draw segment
+		ctx.beginPath();
+		ctx.moveTo(centerX, centerY);
+		ctx.arc(centerX, centerY, radius, startAngle, endAngle, true);
+		ctx.closePath();
+		ctx.fillStyle = color;
+		ctx.fill();
+		
+		// Draw segment border
+		ctx.strokeStyle = 'rgba(0,0,0,0.2)';
+		ctx.lineWidth = 2;
+		ctx.stroke();
+		
+		// Draw text on ALL segments
+		const midAngle = startAngle - anglePerSegment / 2;
+		
+		ctx.save();
+		ctx.translate(centerX, centerY);
+		ctx.rotate(midAngle);
+		
+		// Position text - align to OUTER edge
+		ctx.textAlign = 'right';
+		ctx.textBaseline = 'middle';
+		ctx.fillStyle = wheelState.settings.wheelTextColor;
+		
+		// Calculate font size based on name length
+		const name = wheelState.names[i];
+		let fontSize = 24;
+		if (name.length > 15) fontSize = 18;
+		if (name.length > 20) fontSize = 16;
+		ctx.font = 'bold ' + fontSize + 'px Arial';
+		
+		// Draw text near outer edge (moved from 0.85 to 0.92)
+		ctx.fillText(wheelState.names[i], radius * 0.92, 0);
+		
+		ctx.restore();
+	}
+	
+	// Draw outer ring around wheel edge
+	ctx.beginPath();
+	ctx.arc(centerX, centerY, radius, 0, 2 * Math.PI);
+	ctx.strokeStyle = wheelState.settings.pointerColor;
+	ctx.lineWidth = 2;
+	ctx.stroke();
+	
+	// Draw center circle
+	ctx.beginPath();
+	ctx.arc(centerX, centerY, 40, 0, 2 * Math.PI);
+	ctx.fillStyle = wheelState.settings.pointerColor;
+	ctx.fill();
+	ctx.strokeStyle = 'rgba(0,0,0,0.3)';
+	ctx.lineWidth = 3;
+	ctx.stroke();
+	
+	// Restore context
+	ctx.restore();
+}
+
+/**
+ * Start click sounds during spinning
+ */
+function startClickSounds() {
+	// Initialize Web Audio API
+	if (!wheelState.audioContext) {
+		try {
+			wheelState.audioContext = new (window.AudioContext || window.webkitAudioContext)();
+		} catch (e) {
+			console.warn('[Wheel] AudioContext unavailable, spinning without sound:', e);
+			return;
+		}
+	}
+	
+	wheelState.lastClickSegment = -1;
+	
+	// Play click sound based on rotation
+	wheelState.clickInterval = setInterval(function() {
+		if (!wheelState.isSpinning) return;
+		
+		const anglePerSegment = 360 / wheelState.names.length;
+		const currentSegment = Math.floor((wheelState.rotation % 360) / anglePerSegment);
+		
+		if (currentSegment !== wheelState.lastClickSegment) {
+			playClickSound();
+			wheelState.lastClickSegment = currentSegment;
+		}
+	}, 10);
+}
+
+/**
+ * Stop click sounds
+ */
+function stopClickSounds() {
+	if (wheelState.clickInterval) {
+		clearInterval(wheelState.clickInterval);
+		wheelState.clickInterval = null;
+	}
+}
+
+/**
+ * Play click sound using Web Audio API
+ */
+function playClickSound() {
+	if (!wheelState.audioContext) return;
+	
+	const ctx = wheelState.audioContext;
+	const oscillator = ctx.createOscillator();
+	const gainNode = ctx.createGain();
+	
+	oscillator.connect(gainNode);
+	gainNode.connect(ctx.destination);
+	
+	oscillator.frequency.value = 800;
+	oscillator.type = 'square';
+	
+	gainNode.gain.setValueAtTime(0.1, ctx.currentTime);
+	gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.05);
+	
+	oscillator.start(ctx.currentTime);
+	oscillator.stop(ctx.currentTime + 0.05);
+}
+
+// Initialize when DOM is ready
+if (document.readyState === 'loading') {
+	document.addEventListener('DOMContentLoaded', init);
+} else {
+	init();
+}
+
+</script>
+
+</body>
+</html>

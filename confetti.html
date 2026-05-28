@@ -1,0 +1,448 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.7.6 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>VSD Confetti Overlay</title>
+  <style>
+    html, body { margin:0; padding:0; width:100%; height:100%; background:transparent; overflow:hidden; }
+    canvas { display:block; width:100%; height:100%; background:transparent; }
+    #ui { position:fixed; left:12px; bottom:12px; display:flex; gap:8px;
+          font:13px/1.2 system-ui, sans-serif; z-index:10; }
+    #ui button { padding:8px 10px; border:0; border-radius:8px; cursor:pointer;
+                 backdrop-filter:saturate(120%) blur(4px);
+                 background:rgba(0,0,0,.55); color:#fff; }
+  </style>
+</head>
+<body>
+  <canvas id="confetti"></canvas>
+  <div id="ui">
+    <button id="btnStart">Start</button>
+    <button id="btnStop">Stop</button>
+    <button id="btnBurst">Burst</button>
+  </div>
+
+  <script>
+  (function(){
+    // ============================================================================
+    // VSD Confetti Overlay — Consolidated Engine
+    // Merges: confetti_celebration_engine_v2.html (base)
+    //       + confetti_overlay.html         (depth, oscillation, air resistance)
+    //       + confetti-celebration.html     (circle + triangle shapes)
+    //
+    // URL PARAMETERS — all optional, sane defaults provided:
+    //
+    // BEHAVIOUR
+    //   auto=1              Fire on page load (default: 0)
+    //   mode=rain           rain | snow | burst | shapes | emoji | mixed
+    //                       rain  = paper confetti falling straight down
+    //                       snow  = slow, drifting, oscillating flakes
+    //                       burst = single explosion from centre
+    //                       shapes= geometric shapes (rect/circle/triangle)
+    //                       emoji = emoji particles (use ?emojis= to set)
+    //                       mixed = shapes + emoji combined
+    //   ui=1                Show Start/Stop/Burst buttons (default: 0)
+    //
+    // PHYSICS
+    //   gravity=0.06        Downward acceleration per frame (default varies by mode)
+    //   wind=0.00           Constant horizontal push
+    //   windJitter=0.00     Random wind variation per particle
+    //   drift=0.00          Random initial horizontal velocity range
+    //   spin=0|1            Enable rotation (default: 1 for most modes)
+    //   airResistance=0.99  Velocity multiplier per frame (1.0 = none, 0.95 = heavy)
+    //
+    // APPEARANCE
+    //   density=220         Target particle count on screen
+    //   min=8               Minimum particle size in px
+    //   max=18              Maximum particle size in px
+    //   colors=ff4757,...   Comma-separated hex colors (no #)
+    //   waviness=0.15       Edge waviness for rect particles (0=straight, 0.3=very wavy)
+    //   depth=1             Enable depth/parallax effect (0=off, 1=on)
+    //
+    // EMOJI MODE
+    //   emojis=🎉,✨,🎊     Comma-separated emoji list (up to 6)
+    //
+    // PERFORMANCE
+    //   fps=60              Target frame rate (15–60)
+    //   dpr=1               Device pixel ratio override
+    //   count=120           Particle count for burst mode
+    //
+    // EXAMPLES
+    //   Rain of paper confetti:
+    //     confetti.html?auto=1&mode=rain
+    //
+    //   Slow snow effect:
+    //     confetti.html?auto=1&mode=snow&colors=ffffff,e0f0ff,d0e8ff
+    //
+    //   Emoji celebration burst:
+    //     confetti.html?auto=1&mode=burst&emojis=🎉,✨,🎊&count=200
+    //
+    //   Wolf Pack themed emoji rain:
+    //     confetti.html?auto=1&mode=emoji&emojis=🐺,🐾,🌕,✨
+    //
+    //   Mixed shapes + emoji, dark confetti:
+    //     confetti.html?auto=1&mode=mixed&colors=220901,432818,ffe6a7&emojis=🎉,✨
+    // ============================================================================
+
+    const qs = new URLSearchParams(location.search);
+
+    // ── Behaviour params ──────────────────────────────────────────────────────
+    const showUI  = qs.get('ui')   === '1';
+    const auto    = qs.get('auto') === '1';
+    const mode    = (qs.get('mode') || 'rain').toLowerCase();
+
+    // ── Render / perf ─────────────────────────────────────────────────────────
+    const fps = Math.max(15, Math.min(60, +(qs.get('fps') || 60)));
+    const dpr = Math.max(1,  +(qs.get('dpr') || window.devicePixelRatio || 1));
+
+    // ── Physics (user overrides — NaN means "use mode default") ───────────────
+    const userDensity     = +(qs.get('density')      || NaN);
+    const userGravity     = +(qs.get('gravity')      || NaN);
+    const userWind        = +(qs.get('wind')         || NaN);
+    const userWindJitter  = +(qs.get('windJitter')   || NaN);
+    const userDrift       = +(qs.get('drift')        || NaN);
+    const userSpin        =   qs.get('spin');           // '0' | '1' | null
+    const userAirRes      = +(qs.get('airResistance') || NaN);
+    const useDepth        =   qs.get('depth') !== '0'; // on by default
+
+    // ── Appearance ────────────────────────────────────────────────────────────
+    const minSize   = Math.max(4,        +(qs.get('min')      || 8));
+    const maxSize   = Math.max(minSize,  +(qs.get('max')      || 18));
+    const waviness  = Math.max(0, Math.min(0.5, +(qs.get('waviness') || 0.15)));
+    const colorCSV  = qs.get('colors') || 'ff4757,2ed573,1e90ff,ffa502,f9ca24,8e44ad,00cec9';
+    const colors    = colorCSV.split(',').map(c => '#' + c.trim()).filter(Boolean);
+
+    // ── Emoji ─────────────────────────────────────────────────────────────────
+    function parseEmojis(key, fallback){
+      let v = qs.get(key);
+      if (!v) return fallback;
+      try { v = decodeURIComponent(v); } catch(_) {}
+      return v.split(',').map(s => s.trim()).filter(Boolean).slice(0, 6);
+    }
+    const emojis = parseEmojis('emojis', ['🎉','✨','🎊']);
+
+    // ── Mode defaults ─────────────────────────────────────────────────────────
+    // Each mode has its own physics personality. User params override these.
+    const DEFAULTS = {
+      rain:   { density:220, gravity:0.06,  wind:0.00, windJitter:0.00, spin:true,  drift:0.00, airResistance:1.00 },
+      snow:   { density:180, gravity:0.025, wind:0.01, windJitter:0.01, spin:false, drift:0.20, airResistance:0.995 },
+      burst:  { density:0,   gravity:0.08,  wind:0.00, windJitter:0.00, spin:true,  drift:0.15, airResistance:0.99 },
+      shapes: { density:220, gravity:0.06,  wind:0.00, windJitter:0.00, spin:true,  drift:0.00, airResistance:1.00 },
+      emoji:  { density:220, gravity:0.06,  wind:0.00, windJitter:0.00, spin:true,  drift:0.00, airResistance:1.00 },
+      mixed:  { density:240, gravity:0.055, wind:0.00, windJitter:0.00, spin:true,  drift:0.05, airResistance:0.998 },
+    };
+    const def = DEFAULTS[mode] || DEFAULTS.rain;
+
+    function pick(val, fallback){ return Number.isNaN(val) ? fallback : val; }
+
+    const density     = pick(userDensity,    def.density);
+    const gravity     = pick(userGravity,    def.gravity);
+    const wind        = pick(userWind,       def.wind);
+    const windJitter  = pick(userWindJitter, def.windJitter);
+    const drift       = pick(userDrift,      def.drift);
+    const airRes      = pick(userAirRes,     def.airResistance);
+    const spin        = userSpin === '0' ? false : userSpin === '1' ? true : def.spin;
+
+    // ── Canvas ────────────────────────────────────────────────────────────────
+    const canvas = document.getElementById('confetti');
+    const ctx    = canvas.getContext('2d');
+
+    function resize(){
+      canvas.width  = Math.max(1, Math.round(canvas.clientWidth  * dpr));
+      canvas.height = Math.max(1, Math.round(canvas.clientHeight * dpr));
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    }
+    addEventListener('resize', resize, { passive:true });
+    resize();
+
+    // ── Utilities ─────────────────────────────────────────────────────────────
+    const TAU    = Math.PI * 2;
+    const rnd    = (a, b) => Math.random() * (b - a) + a;
+    const choice = arr => arr[(Math.random() * arr.length) | 0];
+
+    // ── Emoji sprite cache (draw once to offscreen canvas, reuse) ─────────────
+    const spriteCache = new Map();
+    function spriteFor(emoji, px){
+      const key = emoji + '|' + (Math.max(8, px | 0));
+      let s = spriteCache.get(key);
+      if (s) return s;
+      const pad = Math.ceil(px * 0.6);
+      const off = document.createElement('canvas');
+      off.width = off.height = px + pad * 2;
+      const octx = off.getContext('2d');
+      octx.textAlign    = 'center';
+      octx.textBaseline = 'middle';
+      octx.font = `${px}px sans-serif`;
+      octx.fillText(emoji, off.width / 2, off.height / 2);
+      spriteCache.set(key, off);
+      return off;
+    }
+
+    // ── Particle pool ─────────────────────────────────────────────────────────
+    const particles = [];
+    let raf = null, last = performance.now();
+
+    // Determine particle kind from mode
+    function kindForMode(){
+      if (mode === 'emoji')  return 'emoji';
+      if (mode === 'shapes') return choice(['rect','circle','tri']);
+      if (mode === 'mixed')  return Math.random() < 0.5 ? 'emoji' : choice(['rect','circle','tri']);
+      return 'rect'; // rain / snow / burst default
+    }
+
+    function spawnOne(yOffset){
+      const w  = canvas.width  / dpr;
+      const h  = canvas.height / dpr;
+      const yo = yOffset !== undefined ? yOffset : rnd(-0.25, -0.02);
+      const x  = Math.random() * w;
+      const y  = yo * h;
+
+      // Depth (parallax): 0.5–1.0 scale + speed factor
+      const depth = useDepth ? rnd(0.5, 1.0) : 1.0;
+      const size  = rnd(minSize, maxSize) * depth;
+
+      const baseWind = wind + rnd(-windJitter, windJitter);
+      const omega    = spin ? rnd(-0.08, 0.08) : 0;
+      const rot0     = rnd(0, TAU);
+      const initVx   = rnd(-drift, drift);
+
+      // Snow mode: add oscillation state
+      const oscillation      = (mode === 'snow') ? rnd(0, TAU) : 0;
+      const oscillationSpeed = (mode === 'snow') ? rnd(0.02, 0.05) : 0;
+
+      const kind = kindForMode();
+
+      if (kind === 'emoji'){
+        const em  = choice(emojis);
+        const spr = spriteFor(em, Math.max(8, size | 0));
+        particles.push({
+          kind, x, y, depth,
+          vx: initVx, vy: rnd(0.2, 1.0),
+          ax: baseWind, ay: gravity,
+          size, rot: rot0, omega,
+          oscillation, oscillationSpeed,
+          sprite: spr
+        });
+      } else if (kind === 'rect'){
+        particles.push({
+          kind, x, y, depth,
+          vx: initVx, vy: rnd(0.2, 1.0),
+          ax: baseWind, ay: gravity,
+          width:  size,
+          height: size * rnd(0.4, 0.7),
+          rot: rot0, omega,
+          color: choice(colors),
+          waveOffset1: rnd(0, TAU),
+          waveOffset2: rnd(0, TAU),
+          waveSpeed:   rnd(0.1, 0.2),
+          oscillation, oscillationSpeed,
+        });
+      } else {
+        // circle or triangle
+        particles.push({
+          kind, x, y, depth,
+          vx: initVx, vy: rnd(0.2, 1.0),
+          ax: baseWind, ay: gravity,
+          size, rot: rot0, omega,
+          color: choice(colors),
+          oscillation, oscillationSpeed,
+        });
+      }
+    }
+
+    function prefill(){
+      for (let i = 0; i < density; i++) spawnOne(rnd(-1.2, 1));
+    }
+
+    function maintainDensity(){
+      const deficit = density - particles.length;
+      if (deficit <= 0) return;
+      const n = Math.min(deficit, 40);
+      for (let i = 0; i < n; i++) spawnOne();
+    }
+
+    // ── Draw functions ────────────────────────────────────────────────────────
+    function drawRect(p){
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      const hw = p.width  / 2;
+      const hh = p.height / 2;
+      const wv = waviness;
+      ctx.beginPath();
+      ctx.moveTo(-hw, -hh + Math.sin(p.waveOffset1)            * wv * p.height);
+      ctx.lineTo( hw, -hh + Math.sin(p.waveOffset1 + Math.PI)  * wv * p.height);
+      ctx.lineTo( hw + Math.sin(p.waveOffset2)                  * wv * p.width, 0);
+      ctx.lineTo( hw,  hh + Math.sin(p.waveOffset1 + Math.PI)  * wv * p.height);
+      ctx.lineTo(-hw,  hh + Math.sin(p.waveOffset1)            * wv * p.height);
+      ctx.lineTo(-hw + Math.sin(p.waveOffset2 + Math.PI)        * wv * p.width, 0);
+      ctx.closePath();
+      ctx.fill();
+      ctx.restore();
+    }
+
+    function drawShape(p){
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      ctx.fillStyle = p.color;
+      const s = p.size;
+      if (p.kind === 'circle'){
+        ctx.beginPath();
+        ctx.arc(0, 0, s * 0.5, 0, TAU);
+        ctx.fill();
+      } else {
+        // triangle
+        ctx.beginPath();
+        ctx.moveTo(-s * 0.6,  s * 0.5);
+        ctx.lineTo( 0,        -s * 0.6);
+        ctx.lineTo( s * 0.6,  s * 0.5);
+        ctx.closePath();
+        ctx.fill();
+      }
+      ctx.restore();
+    }
+
+    function drawEmoji(p){
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      ctx.rotate(p.rot);
+      const sw = p.sprite.width, sh = p.sprite.height;
+      const scale = p.size / Math.max(sw, sh);
+      ctx.drawImage(p.sprite, -sw * scale / 2, -sh * scale / 2, sw * scale, sh * scale);
+      ctx.restore();
+    }
+
+    // ── Animation loop ────────────────────────────────────────────────────────
+    function step(){
+      raf = requestAnimationFrame(step);
+      const now = performance.now();
+      const ms  = now - last;
+      if (ms < 1000 / fps) return;
+      const dt = ms / 16.6667; // normalise to 60fps ticks
+      last = now;
+
+      const w = canvas.width  / dpr;
+      const h = canvas.height / dpr;
+      ctx.clearRect(0, 0, w, h);
+
+      for (let i = particles.length - 1; i >= 0; i--){
+        const p = particles[i];
+
+        // Physics
+        p.vx += p.ax * dt;
+        p.vy += p.ay * dt;
+
+        // Air resistance (applied to both axes)
+        p.vx *= Math.pow(airRes, dt);
+        p.vy *= Math.pow(airRes, dt);
+
+        // Oscillation sway (snow + any mode with oscillation)
+        if (p.oscillationSpeed){
+          p.oscillation += p.oscillationSpeed * dt;
+          p.vx += Math.sin(p.oscillation) * 0.3 * dt;
+        }
+
+        p.x   += p.vx * dt;
+        p.y   += p.vy * dt;
+        p.rot += p.omega * dt;
+
+        // Advance wave animation for rect particles
+        if (p.kind === 'rect'){
+          p.waveOffset1 += p.waveSpeed * dt;
+          p.waveOffset2 += p.waveSpeed * 0.7 * dt;
+        }
+
+        // Draw
+        if      (p.kind === 'emoji')  drawEmoji(p);
+        else if (p.kind === 'rect')   drawRect(p);
+        else                           drawShape(p);  // circle / tri
+
+        // Cull off-screen
+        const checkSize = p.kind === 'rect' ? Math.max(p.width, p.height) : p.size;
+        if (p.y - checkSize > h + 20 || p.x < -80 || p.x > w + 80){
+          particles.splice(i, 1);
+        }
+      }
+
+      if (mode !== 'burst') maintainDensity();
+    }
+
+    // ── Public controls ───────────────────────────────────────────────────────
+    function start(){
+      if (raf) return;
+      if (mode !== 'burst') prefill();
+      step();
+    }
+
+    function stop(){
+      if (raf){ cancelAnimationFrame(raf); raf = null; }
+    }
+
+    function burst(n){
+      n = n || +(qs.get('count') || 120);
+      const w = canvas.width  / dpr;
+      const h = canvas.height / dpr;
+      for (let i = 0; i < n; i++){
+        const depth = useDepth ? rnd(0.5, 1.0) : 1.0;
+        const size  = rnd(minSize, maxSize) * 1.2 * depth;
+        const x     = rnd(w * 0.25, w * 0.75);
+        const y     = rnd(h * 0.30, h * 0.45);
+        const rot0  = rnd(0, TAU);
+        const omega = spin ? rnd(-0.2, 0.2) : 0;
+        const vx0   = rnd(-2.2, 2.2);
+        const vy0   = rnd(-1.2, -3.2);
+        const baseWind = wind + rnd(-windJitter, windJitter);
+        const kind  = kindForMode();
+
+        if (kind === 'emoji'){
+          const em  = choice(emojis);
+          const spr = spriteFor(em, Math.max(8, size | 0));
+          particles.push({ kind, x, y, depth, vx:vx0, vy:vy0, ax:baseWind, ay:gravity,
+                           size, rot:rot0, omega, oscillation:0, oscillationSpeed:0, sprite:spr });
+        } else if (kind === 'rect'){
+          particles.push({ kind, x, y, depth, vx:vx0, vy:vy0, ax:baseWind, ay:gravity,
+                           width:size, height:size*rnd(0.4,0.7), rot:rot0, omega,
+                           color:choice(colors), waveOffset1:rnd(0,TAU), waveOffset2:rnd(0,TAU),
+                           waveSpeed:rnd(0.1,0.2), oscillation:0, oscillationSpeed:0 });
+        } else {
+          particles.push({ kind, x, y, depth, vx:vx0, vy:vy0, ax:baseWind, ay:gravity,
+                           size, rot:rot0, omega, color:choice(colors),
+                           oscillation:0, oscillationSpeed:0 });
+        }
+      }
+      if (!raf) step();
+    }
+
+    // ── UI ────────────────────────────────────────────────────────────────────
+    document.getElementById('ui').style.display = showUI ? 'flex' : 'none';
+    document.getElementById('btnStart').onclick  = start;
+    document.getElementById('btnStop').onclick   = stop;
+    document.getElementById('btnBurst').onclick  = () => burst();
+
+    // ── postMessage API (OBS / Stream Deck control) ───────────────────────────
+    addEventListener('message', ev => {
+      const d = ev.data || {};
+      if (d.type !== 'CONFETTI') return;
+      if (d.action === 'start')  start();
+      if (d.action === 'stop')   stop();
+      if (d.action === 'burst')  burst(+d.count || undefined);
+    });
+
+    // ── Auto trigger ──────────────────────────────────────────────────────────
+    if (auto){
+      requestAnimationFrame(() => {
+        if (mode === 'burst') burst(); else start();
+      });
+    }
+
+    // ── Expose for console debugging ──────────────────────────────────────────
+    window.VSDConfetti = { start, stop, burst, particles,
+      cfg:{ mode, density, gravity, wind, windJitter, spin, drift,
+            airRes, minSize, maxSize, waviness, useDepth } };
+  })();
+  </script>
+</body>
+</html>

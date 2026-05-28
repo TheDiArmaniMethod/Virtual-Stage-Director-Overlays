@@ -1,0 +1,275 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.7.6 -->
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>OBS Emoji Confetti — Self‑Hosted (Stable)</title>
+  <style>
+    html, body { width:100%; height:100%; margin:0; padding:0; background:transparent; overflow:hidden; }
+    #ui { position:fixed; left:12px; bottom:12px; display:flex; gap:8px; font-family:system-ui, Arial, sans-serif; z-index:10; }
+    #ui button { padding:8px 12px; border:0; border-radius:6px; cursor:pointer; }
+    #log { position:fixed; right:12px; bottom:12px; max-width:40vw; font:12px/1.35 monospace; background:rgba(0,0,0,0.55); color:#fff; padding:8px 10px; border-radius:6px; display:none; white-space:pre-wrap; }
+    canvas { display:block; background:transparent; }
+  </style>
+</head>
+<body>
+  <canvas id="obs-emoji-confetti" width="1920" height="1080"></canvas>
+
+  <div id="ui">
+    <button id="btnBurst">Burst</button>
+    <button id="btnCelebrate">Celebrate</button>
+    <button id="btnContinuous">Rain 5s</button>
+    <button id="btnTopRain">Top Rain 6s</button>
+  </div>
+  <div id="log"></div>
+
+  <script>
+    (function(){
+      // -----------------------------
+      // Query Parameters & Defaults
+      // -----------------------------
+      const qs = new URLSearchParams(location.search);
+      const mode       = qs.get('mode') || 'idle';        // burst | celebrate | continuous | rain
+      const auto       = qs.get('auto') === '1';          // fire on load
+      const duration   = +qs.get('duration') || 5;        // seconds (continuous)
+      const seconds    = +qs.get('seconds')  || 3;        // seconds (celebrate)
+
+      // Smoothed defaults
+      const velocity   = +(qs.get('velocity') || 20);     // initial speed
+      const gravity    = +(qs.get('gravity')  || 0.12);   // px/frame^2
+      const wind       = +(qs.get('wind')     || 0.00);   // px/frame^2
+
+      const count      = Math.min(600, Math.max(5, +(qs.get('count') || 60)));
+      const spreadDeg  = +(qs.get('spread') || 60);
+      const scalar     = +(qs.get('scalar')   || 1.0);    // global size multiplier
+      const emojiPx    = +(qs.get('emojiScalar') || 42);  // base font size in px
+      const showUI     = qs.get('ui') !== '0';
+      const test       = qs.get('test') === '1';          // run self-tests & show log
+      const debug      = qs.get('debug') === '1';         // show debug info/log overlay
+      const widthQ     = +(qs.get('width')  || 1920);
+      const heightQ    = +(qs.get('height') || 1080);
+      const fit        = qs.get('fit') === '1';           // if true, canvas resizes to window
+
+      // Global originY control — defaults to 0.85 (15% from bottom)
+      const baseOriginY = Math.min(1, Math.max(0, +(qs.get('originY') || 0.85)));
+
+      // Top rain controls
+      const rainDuration = +qs.get('rainDuration') || 6;  // seconds top rain
+      const rainBatch   = Math.min(50, Math.max(1, +(qs.get('rainBatch') || 3))); // groups per frame (smoother)
+      const rainCount   = Math.min(60, Math.max(1, +(qs.get('rainCount') || 2))); // particles per group (smoother)
+      const rainRate    = Math.max(0, +(qs.get('rainRate') || 0));                // particles per frame; if >0 overrides batch/count
+      // Allow spawn above top for natural fall-in
+      const rainY       = Math.min(0.2, Math.max(-0.2, +(qs.get('rainY') || -0.05)));
+
+      // Particle cap to prevent jitter
+      const maxParticles = Math.min(4000, Math.max(50, +(qs.get('maxParticles') || 350)));
+
+      // Up to six emojis, comma-separated. Example: ?emojis=🐺,🐾,🌕,✨
+      function parseEmojiParam(qs, key, fallbackArr){
+        let v = qs.get(key);
+        if (!v) return fallbackArr;
+        try { v = decodeURIComponent(v); } catch(_) {}
+        return v.split(',').map(s => s.trim()).filter(Boolean).slice(0, 6);
+      }
+      const rawEmojis = parseEmojiParam(qs, 'emojis', ['🐺','🐾']);
+
+      // -----------------------------
+      // Canvas & Context
+      // -----------------------------
+      const canvas = document.getElementById('obs-emoji-confetti');
+      const ctx = canvas.getContext('2d');
+      canvas.width = widthQ; canvas.height = heightQ;
+
+      if (fit) {
+        const resize = () => { canvas.width = innerWidth; canvas.height = innerHeight; };
+        addEventListener('resize', resize); resize();
+      }
+
+      // -----------------------------
+      // Emoji Particle Engine (text drawing — stable)
+      // -----------------------------
+      const TAU = Math.PI * 2;
+      const particles = [];
+      let rafId = null;
+
+      const rnd = (a,b) => Math.random() * (b - a) + a;
+      const deg2rad = d => d * Math.PI / 180;
+
+      function makeBurst(n, opts={}){
+        const originX = 'originX' in opts ? opts.originX : 0.5;      // 0..1
+        const originY = 'originY' in opts ? opts.originY : baseOriginY;
+        const ang     = 'angle'   in opts ? opts.angle   : 90;       // 90 = up
+        const spr     = 'spread'  in opts ? opts.spread  : spreadDeg;
+        const vel     = 'localVelocity' in opts ? opts.localVelocity : velocity;
+
+        const x0 = originX * canvas.width;
+        const y0 = originY * canvas.height;
+        const half = spr / 2;
+
+        for (let i=0; i<n; i++){
+          if (particles.length >= maxParticles) break; // guardrail
+          const emoji = rawEmojis.length ? rawEmojis[(Math.random()*rawEmojis.length)|0] : '🎉';
+          const speed = rnd(vel * 0.6, vel * 1.2);
+          const theta = deg2rad(ang + rnd(-half, half));
+          const vx = Math.cos(theta) * speed;
+          const vy = -Math.sin(theta) * speed; // up is negative y
+          const size = rnd(emojiPx * 0.85, emojiPx * 1.15) * scalar;
+          const life = rnd(60, 120);
+          const rot  = rnd(0, TAU);
+          const vrot = rnd(-0.1, 0.1);
+          particles.push({ x:x0, y:y0, vx, vy, ax:wind, ay:gravity, size, life, rot, vrot, emoji, a:1 });
+        }
+        loop();
+      }
+
+      function loop(){
+        if (rafId != null) return;
+        const step = () => {
+          rafId = requestAnimationFrame(step);
+          // Clear entire canvas reliably
+          ctx.save();
+          ctx.setTransform(1,0,0,1,0,0);
+          ctx.clearRect(0,0,canvas.width,canvas.height);
+          ctx.restore();
+
+          for (let i = particles.length - 1; i >= 0; i--){
+            const p = particles[i];
+            p.vx += p.ax; p.vy += p.ay;
+            p.x  += p.vx; p.y  += p.vy;
+            p.rot += p.vrot; p.life -= 1;
+            if (p.life < 20) p.a = Math.max(0, p.life / 20);
+
+            ctx.save();
+            ctx.translate(p.x, p.y);
+            ctx.rotate(p.rot);
+            ctx.globalAlpha = p.a;
+            ctx.textAlign = 'center';
+            ctx.textBaseline = 'middle';
+            ctx.font = `${Math.max(8, p.size|0)}px sans-serif`;
+            ctx.fillText(p.emoji, 0, 0);
+            ctx.restore();
+
+            if (p.life <= 0 || p.y - p.size > canvas.height + 200 || p.x + p.size < -200 || p.x - p.size > canvas.width + 200){
+              particles.splice(i, 1);
+            }
+          }
+
+          if (particles.length === 0){ cancelAnimationFrame(rafId); rafId = null; }
+        };
+        rafId = requestAnimationFrame(step);
+      }
+
+      // -----------------------------
+      // Effects
+      // -----------------------------
+      function eBurst(opts={}){ makeBurst(count, Object.assign({}, opts)); }
+
+      function eCelebrate(s=seconds){
+        const end = Date.now() + s*1000;
+        const tick = () => {
+          eBurst({ angle:60,  originX:0.0, originY:baseOriginY, localVelocity: velocity * 1.1 });
+          eBurst({ angle:120, originX:1.0, originY:baseOriginY, localVelocity: velocity * 1.1 });
+          if (Date.now() < end) requestAnimationFrame(tick);
+        };
+        tick();
+      }
+
+      function eContinuous(s=duration){
+        const end = Date.now() + s*1000;
+        const frame = () => {
+          makeBurst(Math.max(2, Math.round(count*0.2)), { angle:90, originY:baseOriginY, localVelocity: Math.max(22, velocity*0.7) });
+          if (Date.now() < end) requestAnimationFrame(frame);
+        };
+        frame();
+      }
+
+      function eTopRain(s=rainDuration){
+        const end = Date.now() + s*1000;
+        const frame = () => {
+          if (rainRate > 0){
+            let remaining = Math.min(rainRate | 0, maxParticles - particles.length);
+            while (remaining > 0){
+              const thisCount = Math.min(remaining, 6);
+              makeBurst(thisCount, { angle:-90, originX:Math.random(), originY:rainY, spread:10, localVelocity: Math.max(10, velocity*0.8) });
+              remaining -= thisCount;
+            }
+          } else {
+            for (let g=0; g<rainBatch; g++){
+              if (particles.length >= maxParticles) break;
+              makeBurst(rainCount, { angle:-90, originX:Math.random(), originY:rainY, spread:10, localVelocity: Math.max(10, velocity*0.8) });
+            }
+          }
+          if (Date.now() < end) requestAnimationFrame(frame);
+        };
+        frame();
+      }
+
+      // -----------------------------
+      // External Messaging (for OBS)
+      // -----------------------------
+      addEventListener('message', ev => {
+        const d = ev.data || {};
+        if (d.type !== 'CONFETTI') return;
+        if (d.action === 'burst') eBurst();
+        if (d.action === 'celebrate') eCelebrate(+d.seconds || seconds);
+        if (d.action === 'continuous') eContinuous(+d.seconds || duration);
+        if (d.action === 'rain') eTopRain(+d.seconds || rainDuration);
+      });
+
+      // -----------------------------
+      // UI Buttons & Visibility
+      // -----------------------------
+      document.getElementById('btnBurst').onclick = () => eBurst();
+      document.getElementById('btnCelebrate').onclick = () => eCelebrate(seconds);
+      document.getElementById('btnContinuous').onclick = () => eContinuous(duration);
+      document.getElementById('btnTopRain').onclick = () => eTopRain(rainDuration);
+      document.getElementById('ui').style.display = showUI ? 'flex' : 'none';
+
+      // -----------------------------
+      // Auto Trigger
+      // -----------------------------
+      if (auto) {
+        requestAnimationFrame(() => {
+          if (mode === 'burst') eBurst();
+          else if (mode === 'celebrate') eCelebrate(seconds);
+          else if (mode === 'continuous') eContinuous(duration);
+          else if (mode === 'rain') eTopRain(rainDuration);
+        });
+      }
+
+      // -----------------------------
+      // Debug / Tests
+      // -----------------------------
+      const logEl = document.getElementById('log');
+      function log(msg){ if(!(test||debug)) return; logEl.style.display='block'; logEl.textContent += "\n"+msg; }
+
+      async function runTests(){
+        try {
+          log('TEST start');
+          const p0 = particles.length; eBurst(); await new Promise(r=>setTimeout(r,250)); log(`Burst created: ${particles.length - p0}`);
+          const p1 = particles.length; eCelebrate(1.5); await new Promise(r=>setTimeout(r,1700)); log(`Celebrate delta: ${particles.length - p1}`);
+          const p2 = particles.length; eContinuous(1.0); await new Promise(r=>setTimeout(r,1200)); log(`Continuous delta: ${particles.length - p2}`);
+          const p3 = particles.length; eTopRain(1.0); await new Promise(r=>setTimeout(r,1200)); log(`TopRain delta: ${particles.length - p3}`);
+          postMessage({type:'CONFETTI', action:'burst'}, '*'); await new Promise(r=>setTimeout(r,150)); log('Message API ok');
+          log(`Cap respected: ${particles.length <= maxParticles} (count=${particles.length}, cap=${maxParticles})`);
+          log('TEST complete');
+        } catch(err){ log('TEST ERROR: ' + (err && err.message || err)); }
+      }
+      if (test) runTests();
+
+      window.addEventListener('error', (e)=>{ log('RUNTIME ERROR: ' + (e && e.message ? e.message : e)); });
+      window.addEventListener('unhandledrejection', (e)=>{ log('UNHANDLED PROMISE: ' + (e && e.reason ? e.reason : e)); });
+
+      if (debug){
+        log('DEBUG MODE');
+        log('URL: ' + location.href);
+        log('Params: ' + JSON.stringify(Object.fromEntries(qs.entries()), null, 2));
+      }
+
+      // Expose for console
+      window._confetti = { eBurst, eCelebrate, eContinuous, eTopRain };
+    })();
+  </script>
+</body>
+</html>

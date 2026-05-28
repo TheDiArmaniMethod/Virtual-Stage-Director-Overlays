@@ -1,0 +1,113 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.7.6 -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1920px;height:1080px;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}
+
+#container{
+  position:absolute;
+  bottom:60px;left:50%;transform:translateX(-50%);
+  width:90%;max-width:1600px;
+  background:var(--bg-color);
+  border-radius:20px;padding:50px;
+  display:flex;align-items:center;justify-content:center;gap:50px;
+  backdrop-filter:blur(10px);
+  border:3px solid rgba(255,255,255,0.3);
+  box-shadow:0 10px 40px rgba(0,0,0,0.3);
+  animation:fadeInUp 0.6s ease-out;
+}
+
+/* Before/After camera illustration */
+#illustration{flex-shrink:0;display:flex;flex-direction:column;align-items:flex-start;gap:16px}
+
+#illustration-frames{display:flex;align-items:center;gap:24px}
+
+.cam-state{
+  display:flex;flex-direction:column;align-items:center;gap:10px;
+  width:160px;
+}
+.cam-frame{
+  width:140px;height:100px;border-radius:12px;border:4px solid #fff;
+  display:flex;align-items:center;justify-content:center;
+  position:relative;overflow:hidden;
+}
+.cam-frame.off{background:#1a1a1a}
+.cam-frame.on{background:linear-gradient(135deg,rgba(16,130,80,0.3),rgba(45,140,255,0.3));border-color:#fff}
+
+.cam-off-icon{font-size:48px;opacity:0.4}
+.cam-on-face{font-size:54px;animation:faceWave 2s ease-in-out infinite}
+.strike{
+  position:absolute;width:100%;height:4px;background:#ff3b3b;
+  top:50%;transform:rotate(-35deg);
+}
+.state-label{font-size:20px;font-weight:600;color:rgba(255,255,255,0.8)}
+
+.arrow-right{font-size:48px;color:rgba(255,255,255,0.6);animation:arrowPulse 1.5s ease-in-out infinite}
+
+#text-content{flex:1;color:#fff}
+#headline{font-size:62px;font-weight:700;margin-bottom:18px;text-shadow:2px 2px 8px rgba(0,0,0,0.3);line-height:1.2}
+#subtext{font-size:38px;font-weight:400;opacity:0.95;text-shadow:1px 1px 4px rgba(0,0,0,0.2);line-height:1.4}
+
+#pointer{font-size:60px;animation:pointDown 1.5s ease-in-out infinite;filter:drop-shadow(2px 2px 4px rgba(0,0,0,0.3));text-align:center}
+
+@keyframes fadeInUp{from{opacity:0;transform:translateX(-50%) translateY(20px)}to{opacity:1;transform:translateX(-50%) translateY(0)}}
+@keyframes faceWave{0%,100%{transform:scale(1)}50%{transform:scale(1.1)}}
+@keyframes arrowPulse{0%,100%{transform:translateX(0);opacity:0.6}50%{transform:translateX(8px);opacity:1}}
+@keyframes pointDown{0%,100%{transform:translateY(0)}50%{transform:translateY(10px)}}
+</style>
+  <script>
+    /* ── Brand colour via URL parameter ─────────────────────────────────────
+       Usage: ?bgColor=220901&bgOpacity=95
+       bgColor  : hex colour without # (default: 220901 — brand brown)
+       bgOpacity: 0-100 (default: 95)
+       Examples:
+         Default brand brown : ?bgColor=220901&bgOpacity=95
+         Zoom blue           : ?bgColor=2D8CFF&bgOpacity=95
+         Dark slate          : ?bgColor=14141E&bgOpacity=96
+         Forest green        : ?bgColor=108250&bgOpacity=95
+    ─────────────────────────────────────────────────────────────────────── */
+    (function() {
+      var qs = new URLSearchParams(location.search);
+      var hex = (qs.get('bgColor') || '220901').replace('#', '');
+      var opacity = Math.min(100, Math.max(0, parseFloat(qs.get('bgOpacity') || '95'))) / 100;
+      var r = parseInt(hex.substring(0,2), 16);
+      var g = parseInt(hex.substring(2,4), 16);
+      var b = parseInt(hex.substring(4,6), 16);
+      var rgba = 'rgba(' + r + ',' + g + ',' + b + ',' + opacity.toFixed(2) + ')';
+      document.documentElement.style.setProperty('--bg-color', rgba);
+    })();
+  </script>
+</head>
+<body>
+<div id="container">
+  <div id="illustration">
+    <div id="illustration-frames">
+      <div class="cam-state">
+        <div class="cam-frame off">
+          <div class="cam-off-icon">📷</div>
+          <div class="strike"></div>
+        </div>
+        <div class="state-label">Camera Off</div>
+      </div>
+      <div class="arrow-right">→</div>
+      <div class="cam-state">
+        <div class="cam-frame on">
+          <div class="cam-on-face">😊</div>
+        </div>
+        <div class="state-label" style="color:#fff">Camera On ✓</div>
+      </div>
+    </div>
+    <div id="pointer">👇</div>
+  </div>
+
+  <div id="text-content">
+    <div id="headline">Turn On Your Camera</div>
+    <div id="subtext">Seeing each other makes this experience so much better. Click the video icon at the bottom left of your Zoom Toolbar to turn on your camera</div>
+  </div>
+
+</div>
+</body>
+</html>

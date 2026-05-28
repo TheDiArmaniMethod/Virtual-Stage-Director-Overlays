@@ -1,0 +1,175 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.7.6 -->
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+*{margin:0;padding:0;box-sizing:border-box}
+body{width:1920px;height:1080px;background:transparent;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Arial,sans-serif;overflow:hidden}
+
+/* ── Reaction showcase ───────────────────────────────── */
+#showcase{
+  position:absolute;
+  bottom:80px;
+  left:50%;
+  transform:translateX(-50%);
+  display:flex;align-items:flex-end;gap:32px;
+}
+
+.reaction-card{
+  display:flex;flex-direction:column;align-items:center;gap:16px;
+  opacity:0;
+  transform:translateY(60px) scale(0.6);
+  transition:opacity 0.5s cubic-bezier(.22,1,.36,1), transform 0.5s cubic-bezier(.22,1,.36,1);
+}
+.reaction-card.visible{opacity:1;transform:translateY(0) scale(1)}
+
+.reaction-circle{
+  width:160px;height:160px;border-radius:50%;
+  background:rgba(30,30,30,0.92);
+  border:3px solid rgba(255,255,255,0.15);
+  display:flex;align-items:center;justify-content:center;
+  font-size:90px;
+  cursor:pointer;
+  box-shadow:0 8px 32px rgba(0,0,0,0.4);
+  transition:all 0.2s;
+  position:relative;
+  overflow:visible;
+}
+.reaction-circle:hover{transform:scale(1.1);border-color:rgba(255,255,255,0.4)}
+
+/* Active pulse ring */
+.reaction-circle.active::after{
+  content:'';
+  position:absolute;
+  inset:-6px;border-radius:50%;
+  border:3px solid rgba(45,140,255,0.7);
+  animation:ringPulse 1.5s ease-out infinite;
+}
+
+.reaction-name{
+  font-size:24px;font-weight:600;color:#fff;
+  text-shadow:1px 1px 4px rgba(0,0,0,0.5);
+  background:rgba(0,0,0,0.45);
+  padding:6px 20px;border-radius:20px;
+  backdrop-filter:blur(4px);
+}
+
+.reaction-desc{
+  font-size:18px;color:rgba(255,255,255,0.7);
+  text-align:center;max-width:160px;
+}
+
+/* Floating "+1" that appears when you "click" a reaction */
+.plus-one{
+  position:absolute;
+  top:-20px;left:50%;transform:translateX(-50%);
+  font-size:28px;font-weight:700;color:#fff;
+  opacity:0;pointer-events:none;
+  text-shadow:0 2px 8px rgba(0,0,0,0.5);
+}
+.plus-one.pop{animation:floatUp 1.2s ease-out forwards}
+
+/* ── Animations ─────────────────────────────────────── */
+@keyframes ringPulse{0%{opacity:1;transform:scale(1)}100%{opacity:0;transform:scale(1.4)}}
+@keyframes floatUp{0%{opacity:1;transform:translateX(-50%) translateY(0)}100%{opacity:0;transform:translateX(-50%) translateY(-60px)}}
+</style>
+  <script>
+    /* ── Brand colour via URL parameter ─────────────────────────────────────
+       Usage: ?bgColor=220901&bgOpacity=95
+       bgColor  : hex colour without # (default: 220901 — brand brown)
+       bgOpacity: 0-100 (default: 95)
+       Examples:
+         Default brand brown : ?bgColor=220901&bgOpacity=95
+         Zoom blue           : ?bgColor=2D8CFF&bgOpacity=95
+         Dark slate          : ?bgColor=14141E&bgOpacity=96
+         Forest green        : ?bgColor=108250&bgOpacity=95
+    ─────────────────────────────────────────────────────────────────────── */
+    (function() {
+      var qs = new URLSearchParams(location.search);
+      var hex = (qs.get('bgColor') || '220901').replace('#', '');
+      var opacity = Math.min(100, Math.max(0, parseFloat(qs.get('bgOpacity') || '95'))) / 100;
+      var r = parseInt(hex.substring(0,2), 16);
+      var g = parseInt(hex.substring(2,4), 16);
+      var b = parseInt(hex.substring(4,6), 16);
+      var rgba = 'rgba(' + r + ',' + g + ',' + b + ',' + opacity.toFixed(2) + ')';
+      document.documentElement.style.setProperty('--bg-color', rgba);
+    })();
+  </script>
+</head>
+<body>
+
+<!-- Emoji showcase -->
+<div id="showcase">
+  <div class="reaction-card" data-emoji="👍" data-name="Yes" data-desc="Thumbs Up" data-delay="0">
+    <div class="reaction-circle">👍<div class="plus-one">+1</div></div>
+    <div class="reaction-name">Yes</div>
+    <div class="reaction-desc">Thumbs Up</div>
+  </div>
+  <div class="reaction-card" data-emoji="❤️" data-name="Love it" data-desc="Heart" data-delay="180">
+    <div class="reaction-circle">❤️<div class="plus-one">+1</div></div>
+    <div class="reaction-name">Love it</div>
+    <div class="reaction-desc">Heart</div>
+  </div>
+  <div class="reaction-card" data-emoji="😂" data-name="Haha" data-desc="Laughing" data-delay="360">
+    <div class="reaction-circle">😂<div class="plus-one">+1</div></div>
+    <div class="reaction-name">Haha</div>
+    <div class="reaction-desc">Laughing</div>
+  </div>
+  <div class="reaction-card" data-emoji="😮" data-name="Wow" data-desc="Surprised" data-delay="540">
+    <div class="reaction-circle">😮<div class="plus-one">+1</div></div>
+    <div class="reaction-name">Wow</div>
+    <div class="reaction-desc">Surprised</div>
+  </div>
+  <div class="reaction-card" data-emoji="😢" data-name="Sad" data-desc="Sad" data-delay="720">
+    <div class="reaction-circle">😢<div class="plus-one">+1</div></div>
+    <div class="reaction-name">Sad</div>
+    <div class="reaction-desc">Sad</div>
+  </div>
+  <div class="reaction-card" data-emoji="👏" data-name="Clap" data-desc="Applause" data-delay="900">
+    <div class="reaction-circle">👏<div class="plus-one">+1</div></div>
+    <div class="reaction-name">Clap</div>
+    <div class="reaction-desc">Applause</div>
+  </div>
+  <div class="reaction-card" data-emoji="✋" data-name="Raise Hand" data-desc="Get attention" data-delay="1080">
+    <div class="reaction-circle" style="background:rgba(45,140,255,0.3);border-color:rgba(45,140,255,0.6)">✋<div class="plus-one">+1</div></div>
+    <div class="reaction-name">Raise Hand</div>
+    <div class="reaction-desc">Get attention</div>
+  </div>
+</div>
+
+<script>
+// Animate cards in with stagger
+const cards = document.querySelectorAll('.reaction-card');
+cards.forEach(card => {
+  const delay = parseInt(card.dataset.delay) + 300;
+  setTimeout(() => card.classList.add('visible'), delay);
+});
+
+// Cycle through reactions to show the "+1" pop animation
+let activeIdx = 0;
+function cycleReaction() {
+  // Remove active from current
+  cards[activeIdx].querySelector('.reaction-circle').classList.remove('active');
+
+  activeIdx = (activeIdx + 1) % cards.length;
+  const circle = cards[activeIdx].querySelector('.reaction-circle');
+  const plusOne = cards[activeIdx].querySelector('.plus-one');
+
+  circle.classList.add('active');
+
+  // Pop the +1
+  plusOne.classList.remove('pop');
+  void plusOne.offsetWidth; // force reflow
+  plusOne.classList.add('pop');
+}
+
+// Start cycling after all cards are visible
+setTimeout(() => {
+  cards[0].querySelector('.reaction-circle').classList.add('active');
+  setInterval(cycleReaction, 1600);
+}, 1400);
+</script>
+
+</body>
+</html>

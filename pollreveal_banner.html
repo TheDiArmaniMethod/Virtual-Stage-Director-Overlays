@@ -1,0 +1,109 @@
+﻿<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.8.6 — LEGACY: no longer used as of v1.6.8.6.
+     The correct-answer banner is now embedded in poll_overlay.html.
+     This file is retained for reference only. -->
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Poll Reveal Banner</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            width: 1920px;
+            height: 1080px;
+            background: transparent;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+            overflow: hidden;
+        }
+        
+        #banner-container {
+            position: absolute;
+            top: 60px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 50%;
+            background: rgba(0, 200, 0, 0.9);
+            border-radius: 12px;
+            padding: 20px 40px;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+            border: 3px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        #banner-label {
+            font-size: 36px;
+            font-weight: bold;
+            color: #ffffff;
+            text-align: center;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+        
+        #banner-answer {
+            font-size: 42px;
+            font-weight: 600;
+            color: #ffffff;
+            text-align: center;
+            line-height: 1.3;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.5);
+        }
+    </style>
+</head>
+<body>
+    <div id="banner-container">
+        <div id="banner-label">CORRECT ANSWER: #1</div>
+        <div id="banner-answer">Answer text goes here</div>
+    </div>
+
+    <script>
+        const params = new URLSearchParams(window.location.search);
+        
+        const correctIndex = params.get('correctIndex') || '1';
+        const answer1 = params.get('answer1') || 'Answer 1';
+        const answer2 = params.get('answer2') || 'Answer 2';
+        const answer3 = params.get('answer3') || 'Answer 3';
+        const answer4 = params.get('answer4') || 'Answer 4';
+        const bannerBgColor = params.get('bannerBgColor') || '#00c800';
+        const bannerTextColor = params.get('bannerTextColor') || '#ffffff';
+        
+        // Get the correct answer text
+        const answers = {
+            '1': answer1,
+            '2': answer2,
+            '3': answer3,
+            '4': answer4
+        };
+        
+        const correctAnswerText = answers[correctIndex] || 'Answer';
+        
+        // Update banner content
+        document.getElementById('banner-label').textContent = 'CORRECT ANSWER: #' + correctIndex;
+        document.getElementById('banner-answer').textContent = correctAnswerText;
+        
+        // Apply colors
+        const container = document.getElementById('banner-container');
+        container.style.background = hexToRgba(bannerBgColor, 0.9);
+        
+        document.getElementById('banner-label').style.color = bannerTextColor;
+        document.getElementById('banner-answer').style.color = bannerTextColor;
+        
+        // Helper function to convert hex to rgba
+        function hexToRgba(hex, alpha) {
+            hex = hex.replace('#', '');
+            const r = parseInt(hex.substring(0, 2), 16);
+            const g = parseInt(hex.substring(2, 4), 16);
+            const b = parseInt(hex.substring(4, 6), 16);
+            return 'rgba(' + r + ', ' + g + ', ' + b + ', ' + alpha + ')';
+        }
+        
+        console.log('[Poll Reveal Banner] Loaded');
+        console.log('[Poll Reveal Banner] Correct answer:', correctIndex, '-', correctAnswerText);
+    </script>
+</body>
+</html>
