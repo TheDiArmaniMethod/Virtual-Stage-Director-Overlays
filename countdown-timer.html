@@ -1,5 +1,5 @@
-﻿<!DOCTYPE html>
-<!-- Virtual Stage Director v1.6.7.6 -->
+<!DOCTYPE html>
+<!-- Virtual Stage Director v1.6.5.2 -->
 <html>
 <head>
     <meta charset="utf-8">
@@ -9,7 +9,7 @@
             padding: 0;
             box-sizing: border-box;
         }
-        
+
         body {
             width: 1920px;
             height: 1080px;
@@ -20,143 +20,173 @@
             align-items: center;
             justify-content: center;
         }
-        
+
         #timer-container {
-            background: rgba(0, 0, 0, 0.8);
             border-radius: 30px;
             padding: 60px 100px;
             border: 5px solid rgba(255, 255, 255, 0.3);
             box-shadow: 0 20px 60px rgba(0, 0, 0, 0.5);
             backdrop-filter: blur(10px);
-            transition: all 0.3s ease;
+            transition: background 0.5s ease;
         }
-        
+
         #timer-display {
             font-size: 180px;
             font-weight: bold;
-            color: #ffffff;
             text-align: center;
-            text-shadow: 0 0 30px rgba(255, 255, 255, 0.5),
-                         0 0 60px rgba(255, 255, 255, 0.3);
             letter-spacing: 10px;
             font-variant-numeric: tabular-nums;
         }
-        
-        /* Fade out animation */
-        @keyframes fadeOut {
-            from {
-                opacity: 1;
-                transform: scale(1);
-            }
-            to {
-                opacity: 0;
-                transform: scale(0.8);
-            }
+
+        #banner {
+            display: none;
+            font-size: 120px;
+            font-weight: bold;
+            text-align: center;
+            letter-spacing: 5px;
+            white-space: nowrap;
         }
-        
+
+        @keyframes fadeOut {
+            from { opacity: 1; transform: scale(1); }
+            to   { opacity: 0; transform: scale(0.8); }
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: scale(0.8); }
+            to   { opacity: 1; transform: scale(1); }
+        }
+
         .fade-out {
             animation: fadeOut 0.5s ease-out forwards;
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease-out forwards;
         }
     </style>
 </head>
 <body>
     <div id="timer-container">
         <div id="timer-display">00:00</div>
+        <div id="banner"></div>
     </div>
 
     <script>
-        // Parse URL parameters
         function getUrlParameter(name) {
             const urlParams = new URLSearchParams(window.location.search);
-            const value = urlParams.get(name);
-            console.log('URL Parameter', name, '=', value); // Debug log
-            return value;
+            return urlParams.get(name);
         }
-        
-        // Get minutes and seconds from URL
-        const minutesParam = getUrlParameter('minutes');
-        const secondsParam = getUrlParameter('seconds');
-        
-        const startMinutes = minutesParam !== null ? parseInt(minutesParam) : 5; // Default 5 minutes if not specified
+
+        // Parses a 6-digit (RRGGBB) or 8-digit (RRGGBBAA) hex string.
+        // defaultAlpha is used when no alpha channel is encoded.
+        function hexToRgba(hex, defaultAlpha) {
+            hex = hex.replace('#', '');
+            const r = parseInt(hex.substr(0, 2), 16);
+            const g = parseInt(hex.substr(2, 2), 16);
+            const b = parseInt(hex.substr(4, 2), 16);
+            const a = hex.length === 8 ? parseInt(hex.substr(6, 2), 16) / 255 : defaultAlpha;
+            return {
+                r, g, b,
+                a: parseFloat(a.toFixed(4)),
+                css: `rgba(${r}, ${g}, ${b}, ${parseFloat(a.toFixed(4))})`
+            };
+        }
+
+        // --- URL parameters ---
+        const minutesParam  = getUrlParameter('minutes');
+        const secondsParam  = getUrlParameter('seconds');
+        const bgHex         = getUrlParameter('bg')      || '000000CC'; // RRGGBBAA; CC ≈ 0.8 opacity
+        const textHex       = getUrlParameter('text')    || 'ffffff';
+        const bannerMessage = getUrlParameter('message') || "Time's Up!";
+
+        const startMinutes = minutesParam !== null ? parseInt(minutesParam) : 5;
         const startSeconds = secondsParam !== null ? parseInt(secondsParam) : 0;
-        
-        console.log('Start Minutes:', startMinutes);
-        console.log('Start Seconds:', startSeconds);
-        
-        // Calculate total seconds
-        let totalSeconds = (startMinutes * 60) + startSeconds;
+
+        let totalSeconds    = (startMinutes * 60) + startSeconds;
         let remainingSeconds = totalSeconds;
-        
-        console.log('Total Seconds:', totalSeconds);
-        
-        // Prevent immediate hide if no time specified
+
         if (totalSeconds <= 0) {
-            totalSeconds = 300; // Default to 5 minutes
+            totalSeconds     = 300;
             remainingSeconds = 300;
-            console.log('No time specified, defaulting to 5 minutes');
         }
-        
-        // Get custom colors if provided
-        const bgColor = getUrlParameter('bg') || '000000';
-        const textColor = getUrlParameter('text') || 'ffffff';
-        
-        // Apply custom colors
+
+        // --- Color setup ---
+        const bgColor      = hexToRgba(bgHex,    0.8);   // fallback alpha 0.8 for legacy 6-digit bg
+        const textColor    = hexToRgba(textHex,  1.0);
+        // Warning color inherits the same alpha as the configured background
+        const warningColor = { r: 148, g: 27, b: 12, a: bgColor.a,
+                               css: `rgba(148, 27, 12, ${bgColor.a})` };
+
         const container = document.getElementById('timer-container');
-        const display = document.getElementById('timer-display');
-        
-        container.style.background = `rgba(${parseInt(bgColor.substr(0,2), 16)}, ${parseInt(bgColor.substr(2,2), 16)}, ${parseInt(bgColor.substr(4,2), 16)}, 0.8)`;
-        
-        // Format time as MM:SS
+        const display   = document.getElementById('timer-display');
+        const banner    = document.getElementById('banner');
+
+        function applyTextColor(el, color) {
+            el.style.color = color.css;
+            el.style.textShadow = `0 0 30px rgba(${color.r}, ${color.g}, ${color.b}, 0.5),
+                                   0 0 60px rgba(${color.r}, ${color.g}, ${color.b}, 0.3)`;
+        }
+
+        container.style.background = bgColor.css;
+        applyTextColor(display, textColor);
+        applyTextColor(banner,  textColor);
+
+        // --- Timer logic ---
+        let warningTriggered = false;
+        let timerInterval;
+        let isPaused = false;
+
         function formatTime(seconds) {
             const mins = Math.floor(seconds / 60);
             const secs = seconds % 60;
             return `${String(mins).padStart(2, '0')}:${String(secs).padStart(2, '0')}`;
         }
-        
-        // Update display
+
         function updateDisplay() {
             display.textContent = formatTime(remainingSeconds);
         }
-        
-        // Hide timer with fade out
-        function hideTimer() {
-            console.log('Timer reached zero - hiding');
-            container.classList.add('fade-out');
-            setTimeout(function() {
-                document.body.style.display = 'none';
+
+        function showBanner() {
+            display.classList.add('fade-out');
+            setTimeout(function () {
+                display.style.display = 'none';
+                banner.textContent = bannerMessage;
+                banner.style.display = 'block';
+                banner.classList.add('fade-in');
             }, 500);
         }
-        
-        // Countdown logic
-        let timerInterval;
-        
+
         function countdown() {
-            console.log('Countdown tick:', remainingSeconds);
             if (remainingSeconds > 0) {
                 remainingSeconds--;
                 updateDisplay();
+
+                if (!warningTriggered && remainingSeconds <= Math.ceil(totalSeconds * 0.1)) {
+                    warningTriggered = true;
+                    container.style.background = warningColor.css;
+                }
             } else {
-                // Timer reached zero - hide automatically
                 clearInterval(timerInterval);
-                hideTimer();
+                showBanner();
             }
         }
-        
-        // Initialize display
+
         updateDisplay();
-        
-        // Start countdown immediately after a brief delay
-        setTimeout(function() {
-            console.log('Starting countdown');
+
+        setTimeout(function () {
             timerInterval = setInterval(countdown, 1000);
         }, 100);
-        
-        // Optional: Add keyboard controls for testing
-        // Press 'r' to reset, 'p' to pause/resume
-        let isPaused = false;
-        document.addEventListener('keydown', function(e) {
+
+        document.addEventListener('keydown', function (e) {
             if (e.key === 'r') {
                 remainingSeconds = totalSeconds;
+                warningTriggered = false;
+                container.style.background = bgColor.css;
+                display.style.display   = 'block';
+                display.classList.remove('fade-out');
+                banner.style.display    = 'none';
+                banner.classList.remove('fade-in');
                 updateDisplay();
             } else if (e.key === 'p') {
                 if (isPaused) {
