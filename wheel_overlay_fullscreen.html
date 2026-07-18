@@ -1,17 +1,14 @@
 <!DOCTYPE html>
 <!--
 	Virtual Stage Director v1.6.8.1
-	- Fixed: Stage Left (and any non-Right) enter animation race condition.
-	  awaitingEnter flag now set in plugin.js BEFORE SetInputSettings so it is
-	  always true when wheel_ready arrives, regardless of whether OBS reloads the
-	  browser source immediately on URL change or only on SetSceneItemEnabled.
-	- Overlay now retries wheel_ready every 200 ms (up to 10 retries / 2 s) in case
-	  the first message was sent before plugin.js set awaitingEnter = true.
-	- hasEntered guard prevents duplicate wheel_enter messages (double-reload scenario)
-	  from re-triggering the animation while the wheel is already on-screen.
+	- Loads an immutable entrant snapshot plus a targeted fullscreen session from the URL.
+	- Announces readiness after OBS identification and acknowledges accepted spin commands.
+	- Rejects stale sessions, invalid winners, and commands received while already spinning.
+	- Uses one guarded, bounded-backoff reconnect timer and stops reconnecting on unload.
+	- A session-targeted enter guard prevents duplicate wheel_enter messages from
+	  re-triggering the animation while the wheel is already on-screen.
 	- 200 ms delay before enterStageAnimation() ensures OBS has made the source
 	  visible before the slide begins.
-	- Console logs added: enterStage URL param on load, direction+offsets on animate.
  -->
 <html lang="en">
 <head>
@@ -139,7 +136,7 @@
 <script>
 // ============================================================================
 // RAFFLE ROULETTE WHEEL OVERLAY V4 — FULL SCREEN VARIANT
-// URL params for initial load + URL hash (#spin:WinnerName:timestamp) for spin commands
+// Immutable URL snapshot/session + targeted OBS CustomEvent spin protocol
 // ============================================================================
 
 const wheelState = {
@@ -159,9 +156,125 @@ const wheelState = {
 	audioContext: null,
 	clickInterval: null,
 	lastClickSegment: -1,
-	hasSpunOnce: false
+	hasSpunOnce: false,
+	hasEntered: false,
+	variant: '',
+	sessionId: '',
+	obsSocket: null,
+	reconnectTimer: null,
+	reconnectAttempt: 0,
+	unloading: false
 };
 const RAFFLE_MAX_ENTRANTS = 60;
+const WHEEL_VARIANT = 'fullscreen';
+
+function sendWheelProtocolEvent(type, spinData) {
+	const ws = wheelState.obsSocket;
+	if (!ws || ws.readyState !== 1) return false;
+	const eventData = Object.assign({
+		type: type,
+		wheelVariant: wheelState.variant,
+		wheelSessionId: wheelState.sessionId
+	}, spinData || {});
+	ws.send(JSON.stringify({
+		op: 6,
+		d: {
+			requestType: 'BroadcastCustomEvent',
+			requestId: type + '-' + Date.now(),
+			requestData: { eventData: eventData }
+		}
+	}));
+	return true;
+}
+
+function scheduleWheelReconnect() {
+	if (wheelState.unloading || wheelState.reconnectTimer) return;
+	const delay = Math.min(1000 * Math.pow(2, wheelState.reconnectAttempt), 10000);
+	wheelState.reconnectAttempt++;
+	wheelState.reconnectTimer = setTimeout(function() {
+		wheelState.reconnectTimer = null;
+		connectWheelOBS();
+	}, delay);
+}
+
+function connectWheelOBS() {
+	if (wheelState.unloading || wheelState.reconnectTimer) return;
+	if (wheelState.obsSocket && (wheelState.obsSocket.readyState === 0 || wheelState.obsSocket.readyState === 1)) return;
+
+	const ws = new WebSocket('ws://127.0.0.1:4455');
+	wheelState.obsSocket = ws;
+	ws.onmessage = function(evt) {
+		if (wheelState.obsSocket !== ws) return;
+		const msg = JSON.parse(evt.data);
+		if (msg.op === 0) {
+			ws.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
+			return;
+		}
+		if (msg.op === 2) {
+			wheelState.reconnectAttempt = 0;
+			sendWheelProtocolEvent('wheel_ready');
+			return;
+		}
+		if (msg.op !== 5 || !msg.d || msg.d.eventType !== 'CustomEvent') return;
+		const data = msg.d.eventData;
+		if (!data || data.wheelVariant !== wheelState.variant || data.wheelSessionId !== wheelState.sessionId) return;
+		if (data.type === 'wheel_ready_request') {
+			sendWheelProtocolEvent('wheel_ready');
+			return;
+		}
+
+		if (data.type === 'wheel_enter') {
+			if (!wheelState.hasEntered) {
+				wheelState.hasEntered = true;
+				setTimeout(function() { enterStageAnimation(); }, 200);
+			}
+			return;
+		}
+		if (data.type === 'wheel_exit') {
+			wheelState.hasEntered = false;
+			exitStageAnimation();
+			return;
+		}
+		if (data.type !== 'wheel_spin') return;
+
+		const acknowledgement = { spinId: data.spinId, winner: data.winner };
+		if (!data.spinId || typeof data.winner !== 'string' || wheelState.names.indexOf(data.winner) === -1) {
+			sendWheelProtocolEvent('wheel_spin_rejected', Object.assign(acknowledgement, { reason: 'invalid_winner' }));
+			return;
+		}
+		if (wheelState.isSpinning) {
+			sendWheelProtocolEvent('wheel_spin_rejected', Object.assign(acknowledgement, { reason: 'busy' }));
+			return;
+		}
+		sendWheelProtocolEvent('wheel_spin_accepted', acknowledgement);
+		spinWheel(data.winner);
+	};
+	ws.onerror = function() {
+		if (wheelState.obsSocket !== ws) return;
+		try { ws.close(); } catch (e) {}
+		scheduleWheelReconnect();
+	};
+	ws.onclose = function() {
+		if (wheelState.obsSocket !== ws) return;
+		wheelState.obsSocket = null;
+		scheduleWheelReconnect();
+	};
+}
+
+function stopWheelOBS() {
+	wheelState.unloading = true;
+	if (wheelState.reconnectTimer) {
+		clearTimeout(wheelState.reconnectTimer);
+		wheelState.reconnectTimer = null;
+	}
+	const ws = wheelState.obsSocket;
+	wheelState.obsSocket = null;
+	if (ws) {
+		ws.onerror = null;
+		ws.onclose = null;
+		try { ws.close(); } catch (e) {}
+	}
+}
 
 /**
  * Initialize the wheel
@@ -183,98 +296,10 @@ function init() {
 	// animation from page-load timing and is fully reliable.
 	initContainerPosition();
 
-	// Connect to OBS WebSocket.
-	// Handshake: overlay sends wheel_ready on op:2 (and retries every 200 ms for up
-	// to 2 s).  plugin.js responds with wheel_enter once awaitingEnter is true.
-	// A hasEntered guard on the overlay side ignores duplicate wheel_enter messages
-	// (which can occur if OBS reloads the page twice — once on SetInputSettings and
-	// again on SetSceneItemEnabled).  hasEntered is reset on wheel_exit so the next
-	// show press works correctly without a page reload.
-	(function() {
-		var readyInterval = null;  // retry timer for wheel_ready
-		var hasEntered    = false; // true after first successful wheel_enter
-
-		console.log('[Wheel FS] Page loaded — enterStage param:', new URLSearchParams(window.location.search).get('enterStage'));
-
-		function clearReadyRetry() {
-			if (readyInterval) { clearInterval(readyInterval); readyInterval = null; }
-		}
-
-		function sendWheelReady(ws) {
-			if (ws.readyState === 1) {
-				ws.send(JSON.stringify({
-					op: 6,
-					d: {
-						requestType: 'BroadcastCustomEvent',
-						requestId:   'wheel-ready-' + Date.now(),
-						requestData: { eventData: { type: 'wheel_ready' } }
-					}
-				}));
-			}
-		}
-
-		function connect() {
-			var ws = new WebSocket('ws://127.0.0.1:4455');
-			ws.onmessage = function(evt) {
-				var msg = JSON.parse(evt.data);
-
-				// op:0 Hello — send Identify
-				if (msg.op === 0) {
-					ws.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
-					return;
-				}
-
-				// op:2 Identified — container is already at the correct off-screen position
-				// (initContainerPosition ran in init()).  Notify plugin.js and keep retrying
-				// every 200 ms until wheel_enter is received, in case plugin.js hasn't set
-				// awaitingEnter = true yet (fast-cache reload race condition).
-				if (msg.op === 2) {
-					clearReadyRetry();
-					sendWheelReady(ws);
-					var retries = 0;
-					readyInterval = setInterval(function() {
-						retries++;
-						if (retries > 10) { clearReadyRetry(); return; } // give up after 2 s
-						sendWheelReady(ws);
-					}, 200);
-					return;
-				}
-
-				if (msg.op !== 5 || msg.d.eventType !== 'CustomEvent') return;
-				var data = msg.d.eventData;
-				if (!data) return;
-
-				if (data.type === 'wheel_enter') {
-					// Always clear the retry interval — whether we animate or not.
-					clearReadyRetry();
-					if (!hasEntered) {
-						// First wheel_enter for this page show: start the animation.
-						// The 200 ms delay guarantees the OBS source is visible before
-						// the slide begins (handles the case where SetSceneItemEnabled
-						// hasn't been processed by OBS yet).
-						hasEntered = true;
-						console.log('[Wheel FS] wheel_enter received — enterStage:', wheelState.settings.enterStage);
-						setTimeout(function() { enterStageAnimation(); }, 200);
-					}
-					// Subsequent wheel_enter (duplicate) is silently ignored.
-					return;
-				}
-
-				if (data.type === 'wheel_exit') {
-					hasEntered = false; // allow the next show press to animate
-					exitStageAnimation();
-					return;
-				}
-
-				if (data.type !== 'wheel_spin') return;
-				if (wheelState.isSpinning) return;
-				spinWheel(data.winner || null);
-			};
-			ws.onerror = function() { clearReadyRetry(); setTimeout(connect, 2000); };
-			ws.onclose = function() { clearReadyRetry(); setTimeout(connect, 2000); };
-		}
-		connect();
-	})();
+	// Connect after the immutable URL snapshot and session have loaded. Each
+	// successful identification sends one matching readiness event.
+	connectWheelOBS();
+	window.addEventListener('beforeunload', stopWheelOBS);
 
 	// Start animation loop
 	wheelState.lastFrameTime = Date.now();
@@ -288,15 +313,17 @@ function init() {
  */
 function loadSettingsFromURL() {
 	const params = new URLSearchParams(window.location.search);
+	wheelState.variant = params.get('wheelVariant') === WHEEL_VARIANT ? WHEEL_VARIANT : '';
+	wheelState.sessionId = params.get('wheelSessionId') || '';
 
 	// Get names and parse
 	const namesStr = params.get('names') || '';
 	const parsedNames = namesStr.split('\n').map(n => n.replace(/\s+/g, ' ').trim()).filter(n => n);
 	if (parsedNames.length > RAFFLE_MAX_ENTRANTS) {
 		console.error('[Wheel FS Overlay] Too many names supplied:', parsedNames.length, 'max is', RAFFLE_MAX_ENTRANTS);
-		wheelState.names = [];
+		wheelState.names = Object.freeze([]);
 	} else {
-		wheelState.names = parsedNames;
+		wheelState.names = Object.freeze(parsedNames.slice());
 	}
 
 	// Get settings
@@ -418,7 +445,7 @@ function exitStageAnimation() {
 function spinWheel(winner) {
 	if (wheelState.names.length === 0) {
 		console.error('[Wheel FS Overlay] No names configured');
-		return;
+		return false;
 	}
 
 	// Clean up any previous spin's banner and confetti
@@ -428,13 +455,13 @@ function spinWheel(winner) {
 	// The plugin is the winner authority; never substitute a different name.
 	if (!winner) {
 		console.error('[Wheel FS Overlay] Spin rejected because no winner was supplied');
-		return;
+		return false;
 	}
 
 	let targetWinnerIndex = wheelState.names.indexOf(winner);
 	if (targetWinnerIndex === -1) {
 		console.error('[Wheel FS Overlay] Spin rejected because winner is not in the displayed list:', winner);
-		return;
+		return false;
 	}
 
 	console.log('[Wheel FS Overlay] Target winner:', wheelState.names[targetWinnerIndex], 'at index', targetWinnerIndex);
@@ -477,6 +504,7 @@ function spinWheel(winner) {
 		}, wheelState.bannerDuration);
 
 	}, wheelState.spinDuration);
+	return true;
 }
 
 /**
