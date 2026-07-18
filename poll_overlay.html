@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Virtual Stage Director v1.6.10.16 -->
+<!-- Virtual Stage Director v1.6.10.23 -->
 <!-- v1.6.8.7: Correct-answer banner triggered by OBS BroadcastCustomEvent (poll_reveal).
      No URL update / no source reload / no flash — mirrors the Raffle Wheel architecture.
      poll_overlay.html maintains its own OBS WebSocket connection and shows the banner
@@ -164,6 +164,10 @@
         const answer2   = params.get('answer2')   || 'Answer 2';
         const answer3   = params.get('answer3')   || 'Answer 3';
         const answer4   = params.get('answer4')   || 'Answer 4';
+        const pollSessionId = params.get('pollSessionId') || '';
+        const configuredCorrectIndex = Number(params.get('correctIndex'));
+        let bannerRevealed = false;
+        let currentRevealId = null;
 
         // Visual params
         const bgColor           = params.get('bgColor')           || '#000000';
@@ -237,6 +241,7 @@
             banner.classList.remove('show');
             void banner.offsetWidth; // force reflow to reset animation
             banner.classList.add('show');
+            bannerRevealed = true;
 
             console.log('[Poll] Reveal banner shown — correct answer:', idx);
         }
@@ -247,6 +252,40 @@
             var ws = null;
             var reconnectTimer = null;
             var shuttingDown = false;
+            var identified = false;
+            var overlayRequestId = 1;
+
+            function broadcastCustomEvent(eventData) {
+                if (!ws || ws.readyState !== WebSocket.OPEN || !identified) return false;
+                ws.send(JSON.stringify({
+                    op: 6,
+                    d: {
+                        requestType: 'BroadcastCustomEvent',
+                        requestId: 'poll-overlay-' + (overlayRequestId++),
+                        requestData: { eventData: eventData }
+                    }
+                }));
+                return true;
+            }
+
+            function emitReady() {
+                broadcastCustomEvent({
+                    type: 'poll_ready',
+                    pollSessionId: pollSessionId,
+                    revealed: bannerRevealed,
+                    revealId: currentRevealId
+                });
+            }
+
+            function emitRevealResult(type, revealId, reason) {
+                var eventData = {
+                    type: type,
+                    pollSessionId: pollSessionId,
+                    revealId: typeof revealId === 'string' ? revealId : ''
+                };
+                if (reason) eventData.reason = reason;
+                broadcastCustomEvent(eventData);
+            }
 
             function scheduleReconnect() {
                 if (shuttingDown || reconnectTimer !== null) return;
@@ -273,28 +312,72 @@
 
                 ws = socket;
                 socket.onmessage = function(evt) {
-                    var msg = JSON.parse(evt.data);
+                    var msg;
+                    try {
+                        msg = JSON.parse(evt.data);
+                    } catch (error) {
+                        return;
+                    }
                     // Handshake
                     if (msg.op === 0) {
                         socket.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
                         return;
                     }
+                    if (msg.op === 2) {
+                        if (ws !== socket) return;
+                        identified = true;
+                        emitReady();
+                        return;
+                    }
                     // Only handle custom events
                     if (msg.op !== 5 || msg.d.eventType !== 'CustomEvent') return;
                     var data = msg.d.eventData;
-                    if (!data || data.type !== 'poll_reveal') return;
-                    showRevealBanner(parseInt(data.correctIndex), data.bannerBgColor, data.bannerTextColor);
+                    if (!data) return;
+                    if (data.type === 'poll_state_probe') {
+                        if (data.pollSessionId === pollSessionId) emitReady();
+                        return;
+                    }
+                    if (data.type !== 'poll_reveal') return;
+
+                    var revealId = typeof data.revealId === 'string' ? data.revealId : '';
+                    if (!pollSessionId || data.pollSessionId !== pollSessionId) {
+                        emitRevealResult('poll_reveal_rejected', revealId, 'session_mismatch');
+                        return;
+                    }
+                    var requestedIndex = Number(data.correctIndex);
+                    if (!Number.isInteger(requestedIndex) || requestedIndex < 1 || requestedIndex > 4 ||
+                        !Number.isInteger(configuredCorrectIndex) || requestedIndex !== configuredCorrectIndex) {
+                        emitRevealResult('poll_reveal_rejected', revealId, 'invalid_correct_index');
+                        return;
+                    }
+                    if (!revealId) {
+                        emitRevealResult('poll_reveal_rejected', revealId, 'invalid_reveal_id');
+                        return;
+                    }
+                    if (bannerRevealed && currentRevealId === revealId) {
+                        emitRevealResult('poll_reveal_accepted', revealId);
+                        return;
+                    }
+                    if (bannerRevealed) {
+                        emitRevealResult('poll_reveal_rejected', revealId, 'already_revealed');
+                        return;
+                    }
+                    showRevealBanner(requestedIndex, data.bannerBgColor, data.bannerTextColor);
+                    currentRevealId = revealId;
+                    emitRevealResult('poll_reveal_accepted', revealId);
                 };
                 socket.onerror = function() {
                     try {
                         socket.close();
                     } catch (err) {
                         if (ws === socket) ws = null;
+                        identified = false;
                         scheduleReconnect();
                     }
                 };
                 socket.onclose = function() {
                     if (ws === socket) ws = null;
+                    identified = false;
                     scheduleReconnect();
                 };
             }
