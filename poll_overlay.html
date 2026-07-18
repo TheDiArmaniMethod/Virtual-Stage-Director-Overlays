@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<!-- Virtual Stage Director v1.6.8.7 -->
+<!-- Virtual Stage Director v1.6.10.16 -->
 <!-- v1.6.8.7: Correct-answer banner triggered by OBS BroadcastCustomEvent (poll_reveal).
      No URL update / no source reload / no flash — mirrors the Raffle Wheel architecture.
      poll_overlay.html maintains its own OBS WebSocket connection and shows the banner
@@ -244,13 +244,39 @@
         // ── OBS WebSocket connection — listens for poll_reveal custom events ──
         // Same pattern as wheel_overlay.html. No reload, no flash.
         (function() {
+            var ws = null;
+            var reconnectTimer = null;
+            var shuttingDown = false;
+
+            function scheduleReconnect() {
+                if (shuttingDown || reconnectTimer !== null) return;
+
+                reconnectTimer = setTimeout(function() {
+                    reconnectTimer = null;
+                    connect();
+                }, 2000);
+            }
+
             function connect() {
-                var ws = new WebSocket('ws://127.0.0.1:4455');
-                ws.onmessage = function(evt) {
+                if (shuttingDown || (ws &&
+                    (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN))) {
+                    return;
+                }
+
+                var socket;
+                try {
+                    socket = new WebSocket('ws://127.0.0.1:4455');
+                } catch (err) {
+                    scheduleReconnect();
+                    return;
+                }
+
+                ws = socket;
+                socket.onmessage = function(evt) {
                     var msg = JSON.parse(evt.data);
                     // Handshake
                     if (msg.op === 0) {
-                        ws.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
+                        socket.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
                         return;
                     }
                     // Only handle custom events
@@ -259,9 +285,33 @@
                     if (!data || data.type !== 'poll_reveal') return;
                     showRevealBanner(parseInt(data.correctIndex), data.bannerBgColor, data.bannerTextColor);
                 };
-                ws.onerror = function() { setTimeout(connect, 2000); };
-                ws.onclose = function() { setTimeout(connect, 2000); };
+                socket.onerror = function() {
+                    try {
+                        socket.close();
+                    } catch (err) {
+                        if (ws === socket) ws = null;
+                        scheduleReconnect();
+                    }
+                };
+                socket.onclose = function() {
+                    if (ws === socket) ws = null;
+                    scheduleReconnect();
+                };
             }
+
+            window.addEventListener('beforeunload', function() {
+                shuttingDown = true;
+                if (reconnectTimer !== null) {
+                    clearTimeout(reconnectTimer);
+                    reconnectTimer = null;
+                }
+                if (ws) {
+                    ws.onclose = null;
+                    ws.close();
+                    ws = null;
+                }
+            });
+
             connect();
         })();
 
