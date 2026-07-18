@@ -150,6 +150,7 @@ const wheelState = {
 	lastClickSegment: -1,
 	hasSpunOnce: false  // <-- ADD THIS LINE
 };
+const RAFFLE_MAX_ENTRANTS = 60;
 
 /**
  * Initialize the wheel
@@ -203,7 +204,13 @@ function loadSettingsFromURL() {
 	
 	// Get names and parse
 	const namesStr = params.get('names') || '';
-	wheelState.names = namesStr.split('\n').filter(n => n.trim()).slice(0, 60);
+	const parsedNames = namesStr.split('\n').map(n => n.replace(/\s+/g, ' ').trim()).filter(n => n);
+	if (parsedNames.length > RAFFLE_MAX_ENTRANTS) {
+		console.error('[Wheel Overlay] Too many names supplied:', parsedNames.length, 'max is', RAFFLE_MAX_ENTRANTS);
+		wheelState.names = [];
+	} else {
+		wheelState.names = parsedNames;
+	}
 	
 	// Get settings
 	wheelState.settings = {
@@ -247,16 +254,16 @@ function spinWheel(winner) {
 	hideWinnerBanner();
 	document.querySelectorAll('.confetti').forEach(function(el) { el.remove(); });
 	
-	// Find winner index
-	let targetWinnerIndex = 0;
-	if (winner) {
-		targetWinnerIndex = wheelState.names.indexOf(winner);
-		if (targetWinnerIndex === -1) {
-			console.warn('[Wheel Overlay] Winner not found in list, using random');
-			targetWinnerIndex = Math.floor(Math.random() * wheelState.names.length);
-		}
-	} else {
-		targetWinnerIndex = Math.floor(Math.random() * wheelState.names.length);
+	// The plugin is the winner authority; never substitute a different name.
+	if (!winner) {
+		console.error('[Wheel Overlay] Spin rejected because no winner was supplied');
+		return;
+	}
+
+	let targetWinnerIndex = wheelState.names.indexOf(winner);
+	if (targetWinnerIndex === -1) {
+		console.error('[Wheel Overlay] Spin rejected because winner is not in the displayed list:', winner);
+		return;
 	}
 	
 	console.log('[Wheel Overlay] Target winner:', wheelState.names[targetWinnerIndex], 'at index', targetWinnerIndex);
