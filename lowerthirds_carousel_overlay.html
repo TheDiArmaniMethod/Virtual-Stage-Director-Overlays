@@ -5,6 +5,7 @@
 	- Full rewrite: loads once, connects directly to OBS WebSocket
 	- Next/Prev navigation via BroadcastCustomEvent — no page reloads, full slide animations
 	- Supports up to 15 messages
+	- Owns one guarded reconnect timer, ignores stale sockets, and stops on unload
 
 -->
 <html lang="en">
@@ -135,17 +136,43 @@ function init() {
 	// plugin.js calls BroadcastCustomEvent; the overlay connects directly to
 	// OBS WebSocket and listens. No dependency on obs-browser plugin version.
 	(function() {
-		var ws;
+		var ws = null;
+		var reconnectTimer = null;
+		var unloading = false;
+		var authenticationBlocked = false;
+
+		function scheduleReconnect(socket) {
+			if (unloading || authenticationBlocked || ws !== socket || reconnectTimer !== null) return;
+
+			var timer = setTimeout(function() {
+				if (reconnectTimer !== timer) return;
+				reconnectTimer = null;
+				if (unloading || ws !== socket) return;
+				ws = null;
+				connect();
+			}, 2000);
+			reconnectTimer = timer;
+		}
 
 		function connect() {
-			ws = new WebSocket('ws://127.0.0.1:4455');
+			if (unloading || authenticationBlocked || reconnectTimer !== null) return;
+			if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
 
-			ws.onmessage = function(evt) {
+			var socket = new WebSocket('ws://127.0.0.1:4455');
+			ws = socket;
+
+			socket.onmessage = function(evt) {
+				if (unloading || authenticationBlocked || ws !== socket) return;
 				var msg = JSON.parse(evt.data);
 
 				// OBS WebSocket v5 handshake: Hello (op 0) → Identify (op 1)
 				if (msg.op === 0) {
-					ws.send(JSON.stringify({
+					if (msg.d && Object.prototype.hasOwnProperty.call(msg.d, 'authentication')) {
+						authenticationBlocked = true;
+						try { socket.close(); } catch (e) {}
+						return;
+					}
+					socket.send(JSON.stringify({
 						op: 1,
 						d: { rpcVersion: 1, eventSubscriptions: 1 }
 					}));
@@ -177,10 +204,35 @@ function init() {
 				});
 			};
 
-			ws.onerror = function() { setTimeout(connect, 2000); };
-			ws.onclose = function() { setTimeout(connect, 2000); };
+			socket.onerror = function() {
+				if (unloading || ws !== socket) return;
+				try { socket.close(); } catch (e) {}
+				scheduleReconnect(socket);
+			};
+			socket.onclose = function() {
+				if (unloading || ws !== socket) return;
+				scheduleReconnect(socket);
+			};
 		}
 
+		function stop() {
+			if (unloading) return;
+			unloading = true;
+			if (reconnectTimer !== null) {
+				clearTimeout(reconnectTimer);
+				reconnectTimer = null;
+			}
+			var socket = ws;
+			ws = null;
+			if (socket) {
+				socket.onmessage = null;
+				socket.onerror = null;
+				socket.onclose = null;
+				try { socket.close(); } catch (e) {}
+			}
+		}
+
+		window.addEventListener('beforeunload', stop);
 		connect();
 	})();
 }

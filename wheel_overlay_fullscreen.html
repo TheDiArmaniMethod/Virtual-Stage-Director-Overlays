@@ -163,6 +163,7 @@ const wheelState = {
 	obsSocket: null,
 	reconnectTimer: null,
 	reconnectAttempt: 0,
+	authenticationBlocked: false,
 	unloading: false
 };
 const RAFFLE_MAX_ENTRANTS = 60;
@@ -188,7 +189,7 @@ function sendWheelProtocolEvent(type, spinData) {
 }
 
 function scheduleWheelReconnect() {
-	if (wheelState.unloading || wheelState.reconnectTimer) return;
+	if (wheelState.unloading || wheelState.authenticationBlocked || wheelState.reconnectTimer) return;
 	const delay = Math.min(1000 * Math.pow(2, wheelState.reconnectAttempt), 10000);
 	wheelState.reconnectAttempt++;
 	wheelState.reconnectTimer = setTimeout(function() {
@@ -198,15 +199,20 @@ function scheduleWheelReconnect() {
 }
 
 function connectWheelOBS() {
-	if (wheelState.unloading || wheelState.reconnectTimer) return;
+	if (wheelState.unloading || wheelState.authenticationBlocked || wheelState.reconnectTimer) return;
 	if (wheelState.obsSocket && (wheelState.obsSocket.readyState === 0 || wheelState.obsSocket.readyState === 1)) return;
 
 	const ws = new WebSocket('ws://127.0.0.1:4455');
 	wheelState.obsSocket = ws;
 	ws.onmessage = function(evt) {
-		if (wheelState.obsSocket !== ws) return;
+		if (wheelState.authenticationBlocked || wheelState.obsSocket !== ws) return;
 		const msg = JSON.parse(evt.data);
 		if (msg.op === 0) {
+			if (msg.d && Object.prototype.hasOwnProperty.call(msg.d, 'authentication')) {
+				wheelState.authenticationBlocked = true;
+				try { ws.close(); } catch (e) {}
+				return;
+			}
 			ws.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
 			return;
 		}

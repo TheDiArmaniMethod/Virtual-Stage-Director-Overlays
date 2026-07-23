@@ -253,6 +253,7 @@
             var reconnectTimer = null;
             var shuttingDown = false;
             var identified = false;
+            var authenticationBlocked = false;
             var overlayRequestId = 1;
 
             function broadcastCustomEvent(eventData) {
@@ -288,7 +289,7 @@
             }
 
             function scheduleReconnect() {
-                if (shuttingDown || reconnectTimer !== null) return;
+                if (shuttingDown || authenticationBlocked || reconnectTimer !== null) return;
 
                 reconnectTimer = setTimeout(function() {
                     reconnectTimer = null;
@@ -297,7 +298,7 @@
             }
 
             function connect() {
-                if (shuttingDown || (ws &&
+                if (shuttingDown || authenticationBlocked || (ws &&
                     (ws.readyState === WebSocket.CONNECTING || ws.readyState === WebSocket.OPEN))) {
                     return;
                 }
@@ -312,6 +313,7 @@
 
                 ws = socket;
                 socket.onmessage = function(evt) {
+                    if (authenticationBlocked || ws !== socket) return;
                     var msg;
                     try {
                         msg = JSON.parse(evt.data);
@@ -320,6 +322,12 @@
                     }
                     // Handshake
                     if (msg.op === 0) {
+                        if (msg.d && Object.prototype.hasOwnProperty.call(msg.d, 'authentication')) {
+                            authenticationBlocked = true;
+                            identified = false;
+                            try { socket.close(); } catch (error) {}
+                            return;
+                        }
                         socket.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
                         return;
                     }
