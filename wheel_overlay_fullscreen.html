@@ -164,7 +164,8 @@ const wheelState = {
 	reconnectTimer: null,
 	reconnectAttempt: 0,
 	authenticationBlocked: false,
-	unloading: false
+	unloading: false,
+	animationFrames: new Set()
 };
 const RAFFLE_MAX_ENTRANTS = 60;
 const WHEEL_VARIANT = 'fullscreen';
@@ -267,8 +268,23 @@ function connectWheelOBS() {
 	};
 }
 
+function scheduleWheelAnimationFrame(callback) {
+	if (wheelState.unloading) return null;
+	let frameId = requestAnimationFrame(function(timestamp) {
+		wheelState.animationFrames.delete(frameId);
+		if (wheelState.unloading) return;
+		callback(timestamp);
+	});
+	wheelState.animationFrames.add(frameId);
+	return frameId;
+}
+
 function stopWheelOBS() {
 	wheelState.unloading = true;
+	wheelState.animationFrames.forEach(function(frameId) {
+		cancelAnimationFrame(frameId);
+	});
+	wheelState.animationFrames.clear();
 	if (wheelState.reconnectTimer) {
 		clearTimeout(wheelState.reconnectTimer);
 		wheelState.reconnectTimer = null;
@@ -309,7 +325,7 @@ function init() {
 
 	// Start animation loop
 	wheelState.lastFrameTime = Date.now();
-	requestAnimationFrame(animate);
+	scheduleWheelAnimationFrame(animate);
 
 	console.log('[Wheel FS Overlay V4] Initialized with', wheelState.names.length, 'names');
 }
@@ -616,10 +632,10 @@ function createConfettiParticle(x, y, direction, colors) {
 		confetti.style.transform = 'rotate(' + currentRotation + 'deg)';
 		confetti.style.opacity = opacity;
 
-		requestAnimationFrame(animateConfetti);
+		scheduleWheelAnimationFrame(animateConfetti);
 	}
 
-	requestAnimationFrame(animateConfetti);
+	scheduleWheelAnimationFrame(animateConfetti);
 }
 
 /**
@@ -655,7 +671,7 @@ function animate() {
 	// Draw wheel
 	drawWheel();
 
-	requestAnimationFrame(animate);
+	scheduleWheelAnimationFrame(animate);
 }
 
 /**
