@@ -165,7 +165,8 @@ const wheelState = {
 	reconnectAttempt: 0,
 	authenticationBlocked: false,
 	unloading: false,
-	animationFrames: new Set()
+	animationFrames: new Set(),
+	lifecycleTimeouts: new Set()
 };
 const RAFFLE_MAX_ENTRANTS = 60;
 const WHEEL_VARIANT = 'fullscreen';
@@ -193,7 +194,7 @@ function scheduleWheelReconnect() {
 	if (wheelState.unloading || wheelState.authenticationBlocked || wheelState.reconnectTimer) return;
 	const delay = Math.min(1000 * Math.pow(2, wheelState.reconnectAttempt), 10000);
 	wheelState.reconnectAttempt++;
-	wheelState.reconnectTimer = setTimeout(function() {
+	wheelState.reconnectTimer = scheduleWheelTimeout(function() {
 		wheelState.reconnectTimer = null;
 		connectWheelOBS();
 	}, delay);
@@ -233,7 +234,7 @@ function connectWheelOBS() {
 		if (data.type === 'wheel_enter') {
 			if (!wheelState.hasEntered) {
 				wheelState.hasEntered = true;
-				setTimeout(function() { enterStageAnimation(); }, 200);
+				scheduleWheelTimeout(function() { enterStageAnimation(); }, 200);
 			}
 			return;
 		}
@@ -279,16 +280,41 @@ function scheduleWheelAnimationFrame(callback) {
 	return frameId;
 }
 
+function scheduleWheelTimeout(callback, delay) {
+	if (wheelState.unloading) return null;
+	let timeoutId = setTimeout(function() {
+		wheelState.lifecycleTimeouts.delete(timeoutId);
+		if (wheelState.unloading) return;
+		callback();
+	}, delay);
+	wheelState.lifecycleTimeouts.add(timeoutId);
+	return timeoutId;
+}
+
+function stopWheelAudio() {
+	stopClickSounds();
+	const audioContext = wheelState.audioContext;
+	wheelState.audioContext = null;
+	if (audioContext && typeof audioContext.close === 'function') {
+		try {
+			const closing = audioContext.close();
+			if (closing && typeof closing.catch === 'function') closing.catch(function() {});
+		} catch (e) {}
+	}
+}
+
 function stopWheelOBS() {
 	wheelState.unloading = true;
 	wheelState.animationFrames.forEach(function(frameId) {
 		cancelAnimationFrame(frameId);
 	});
 	wheelState.animationFrames.clear();
-	if (wheelState.reconnectTimer) {
-		clearTimeout(wheelState.reconnectTimer);
-		wheelState.reconnectTimer = null;
-	}
+	wheelState.lifecycleTimeouts.forEach(function(timeoutId) {
+		clearTimeout(timeoutId);
+	});
+	wheelState.lifecycleTimeouts.clear();
+	wheelState.reconnectTimer = null;
+	stopWheelAudio();
 	const ws = wheelState.obsSocket;
 	wheelState.obsSocket = null;
 	if (ws) {
@@ -444,7 +470,7 @@ function enterStageAnimation() {
 
 	// setTimeout(50) guarantees at least one painted frame at the offscreen
 	// position before the transition fires, regardless of Chromium's batching.
-	setTimeout(function() {
+	scheduleWheelTimeout(function() {
 		container.style.transition      = pos.prop + ' 0.65s cubic-bezier(0.25, 0.46, 0.45, 0.94)';
 		container.style[pos.prop]       = pos.rest;
 	}, 50);
@@ -516,12 +542,12 @@ function spinWheel(winner) {
 	// Schedule winner banner - show AFTER wheel stops
 	// Use the pre-determined winner directly — avoids floating-point rotation re-derivation
 	const confirmedWinner = wheelState.names[targetWinnerIndex];
-	setTimeout(function() {
+	scheduleWheelTimeout(function() {
 		showWinnerBanner(confirmedWinner);
 		stopClickSounds();
 
 		// Hide banner after duration
-		setTimeout(function() {
+		scheduleWheelTimeout(function() {
 			hideWinnerBanner();
 		}, wheelState.bannerDuration);
 
