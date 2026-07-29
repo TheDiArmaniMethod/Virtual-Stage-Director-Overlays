@@ -1,0 +1,264 @@
+<!DOCTYPE html>
+<!--
+	Virtual Stage Director — Closing Sequence
+	Canonical deployment:
+	https://thediarmanimethod.github.io/Virtual-Stage-Director-Overlays/closing_sequence_overlay.html
+
+	QR generation uses qrcode-generator by Kazuhiko Arase (MIT), loaded from
+	the same reviewed GitHub Pages repository. No third-party QR service is used.
+-->
+<html>
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<title>Virtual Stage Director Closing Sequence</title>
+	<style>
+		:root { --bg:#101018; --panel:#1d2330; --text:#fff; --accent:#ffd166; }
+		* { box-sizing:border-box; }
+		html, body { width:100%; height:100%; margin:0; overflow:hidden; background:transparent; color:var(--text); font-family:Inter,"Segoe UI",Arial,sans-serif; }
+		body { padding:54px 86px; }
+		#stage { position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+		#card { position:relative; width:min(1540px,100%); min-height:760px; max-height:920px; padding:72px 86px 64px; border:3px solid var(--accent); border-radius:42px; background:var(--panel); box-shadow:0 32px 90px rgba(0,0,0,.45); display:flex; flex-direction:column; justify-content:center; }
+		#eyebrow { margin:0 0 18px; color:var(--accent); font-size:26px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
+		#heading { margin:0 0 28px; max-width:1220px; font-size:72px; line-height:1.06; letter-spacing:-.025em; overflow-wrap:anywhere; }
+		#content { display:grid; grid-template-columns:minmax(0,1fr); gap:22px; font-size:36px; line-height:1.36; }
+		#content.with-aside { grid-template-columns:minmax(0,1fr) 360px; align-items:center; gap:58px; }
+		#primary { min-width:0; }
+		#primary p { margin:0 0 20px; white-space:pre-wrap; overflow-wrap:anywhere; }
+		ul { margin:0; padding:0; list-style:none; display:grid; gap:17px; }
+		li { position:relative; padding-left:38px; overflow-wrap:anywhere; }
+		li::before { content:""; position:absolute; left:0; top:.55em; width:13px; height:13px; border-radius:50%; background:var(--accent); }
+		.resource { margin-bottom:22px; padding:18px 24px; border-left:7px solid var(--accent); border-radius:0 16px 16px 0; background:rgba(255,255,255,.055); }
+		.resource-title { display:block; font-size:34px; font-weight:800; }
+		.resource-url, #visible-url { display:block; margin-top:6px; color:var(--accent); font-size:25px; overflow-wrap:anywhere; }
+		.credit-group { margin-bottom:22px; }
+		.credit-label { color:var(--accent); font-size:23px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+		.credit-line { margin-top:6px; font-size:32px; overflow-wrap:anywhere; }
+		.meta { color:var(--accent); font-weight:700; }
+		#aside { display:none; text-align:center; }
+		#aside.visible { display:block; }
+		#qr { width:336px; height:336px; margin:0 auto 14px; padding:16px; background:#fff; display:grid; }
+		.qr-row { display:flex; flex:1; }
+		.qr-cell { flex:1; }
+		.qr-cell.dark { background:#000; }
+		.qr-cell.light { background:#fff; }
+		#logo { display:none; max-width:320px; max-height:270px; margin:0 auto 24px; object-fit:contain; }
+		#logo.visible { display:block; }
+		#counter { position:absolute; right:54px; bottom:34px; color:var(--text); opacity:.7; font-size:24px; font-weight:700; letter-spacing:.08em; }
+		#invalid { display:none; font-size:32px; color:#fff; background:#7b1e28; border-radius:18px; padding:24px 30px; }
+		@media (prefers-reduced-motion:no-preference) {
+			#card { animation:arrive .42s ease-out both; }
+			@keyframes arrive { from { opacity:0; transform:translateY(24px) scale(.985); } to { opacity:1; transform:none; } }
+		}
+	</style>
+</head>
+<body>
+	<main id="stage" aria-live="polite">
+		<section id="card" aria-labelledby="heading">
+			<div id="eyebrow"></div>
+			<h1 id="heading"></h1>
+			<div id="content">
+				<div id="primary"></div>
+				<aside id="aside">
+					<img id="logo" alt="">
+					<div id="qr" aria-label="QR code"></div>
+					<div id="visible-url"></div>
+				</aside>
+			</div>
+			<div id="counter" aria-label="Page number"></div>
+		</section>
+		<div id="invalid">Closing sequence data is unavailable.</div>
+	</main>
+
+	<script src="qrcode.js"></script>
+	<script>
+	(function() {
+		'use strict';
+		var PREFIX = '#vsd-closing=';
+		var MAX_FRAGMENT = 12000;
+		var unloading = false;
+
+		function text(value, maximum) {
+			return typeof value === 'string' ? value.trim().slice(0, maximum) : '';
+		}
+
+		function httpsUrl(value) {
+			try {
+				var parsed = new URL(value);
+				if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null;
+				return parsed;
+			} catch (_) {
+				return null;
+			}
+		}
+
+		function visibleAddress(parsed) {
+			return parsed ? parsed.hostname + (parsed.pathname === '/' ? '' : parsed.pathname) : '';
+		}
+
+		function appendText(parent, tag, value, className) {
+			var element = document.createElement(tag);
+			element.textContent = value;
+			if (className) element.className = className;
+			parent.appendChild(element);
+			return element;
+		}
+
+		function renderQr(parsed) {
+			var container = document.getElementById('qr');
+			container.innerHTML = '';
+			var qr = qrcode(0, 'M');
+			qr.addData(parsed.href, 'Byte');
+			qr.make();
+			var count = qr.getModuleCount();
+			container.style.gridTemplateRows = 'repeat(' + count + ',1fr)';
+			for (var row = 0; row < count; row++) {
+				var rowElement = document.createElement('div');
+				rowElement.className = 'qr-row';
+				for (var column = 0; column < count; column++) {
+					var cell = document.createElement('div');
+					cell.className = 'qr-cell ' + (qr.isDark(row, column) ? 'dark' : 'light');
+					rowElement.appendChild(cell);
+				}
+				container.appendChild(rowElement);
+			}
+		}
+
+		function showAside(urlValue, logoValue) {
+			var aside = document.getElementById('aside');
+			var parsed = httpsUrl(urlValue);
+			var logoParsed = httpsUrl(logoValue);
+			var logo = document.getElementById('logo');
+			var qrElement = document.getElementById('qr');
+			logo.className = '';
+			logo.removeAttribute('src');
+			qrElement.style.display = parsed ? 'grid' : 'none';
+			document.getElementById('visible-url').textContent = parsed ? visibleAddress(parsed) : '';
+			if (logoParsed) {
+				logo.referrerPolicy = 'no-referrer';
+				logo.src = logoParsed.href;
+				logo.className = 'visible';
+			}
+			if (parsed) renderQr(parsed);
+			aside.className = parsed || logoParsed ? 'visible' : '';
+			document.getElementById('content').className = parsed || logoParsed ? 'with-aside' : '';
+		}
+
+		function renderSummary(page, primary) {
+			var list = document.createElement('ul');
+			(page.items || []).slice(0, 5).forEach(function(item) {
+				appendText(list, 'li', text(item, 140));
+			});
+			if (list.children.length) primary.appendChild(list);
+			if (page.sentence) appendText(primary, 'p', text(page.sentence, 240));
+			showAside('', '');
+		}
+
+		function renderResources(page, primary) {
+			(page.resources || []).slice(0, 3).forEach(function(resource) {
+				var parsed = httpsUrl(resource.url);
+				if (!parsed) return;
+				var block = document.createElement('div');
+				block.className = 'resource';
+				appendText(block, 'span', text(resource.title, 100) || visibleAddress(parsed), 'resource-title');
+				appendText(block, 'span', visibleAddress(parsed), 'resource-url');
+				primary.appendChild(block);
+			});
+			var qrResource = (page.resources || []).find(function(resource) {
+				return resource.qr === true && httpsUrl(resource.url);
+			});
+			showAside(qrResource ? qrResource.url : '', '');
+		}
+
+		function renderCredits(page, primary) {
+			(page.groups || []).forEach(function(group) {
+				var wrapper = document.createElement('div');
+				wrapper.className = 'credit-group';
+				appendText(wrapper, 'div', text(group.label, 60), 'credit-label');
+				(group.lines || []).forEach(function(line) {
+					appendText(wrapper, 'div', text(line, 140), 'credit-line');
+				});
+				primary.appendChild(wrapper);
+			});
+			showAside('', '');
+		}
+
+		function renderNext(page, primary) {
+			if (page.event) appendText(primary, 'p', text(page.event, 120));
+			if (page.when) appendText(primary, 'p', text(page.when, 120), 'meta');
+			if (page.instruction) appendText(primary, 'p', text(page.instruction, 240));
+			showAside(page.qr === true ? page.url : '', '');
+			if (page.url && page.qr !== true) {
+				var parsed = httpsUrl(page.url);
+				if (parsed) appendText(primary, 'p', visibleAddress(parsed), 'resource-url');
+			}
+		}
+
+		function renderThanks(page, primary) {
+			if (page.message) appendText(primary, 'p', text(page.message, 180));
+			if (page.organization) appendText(primary, 'p', text(page.organization, 120), 'meta');
+			var parsed = httpsUrl(page.website);
+			if (parsed) appendText(primary, 'p', visibleAddress(parsed), 'resource-url');
+			showAside('', page.logoUrl);
+		}
+
+		function failClosed() {
+			document.getElementById('card').style.display = 'none';
+			document.getElementById('invalid').style.display = 'block';
+		}
+
+		function readPayload() {
+			var hash = String(window.location.hash || '');
+			if (hash.length > MAX_FRAGMENT || hash.indexOf(PREFIX) !== 0) throw new Error('invalid fragment');
+			var payload = JSON.parse(decodeURIComponent(hash.slice(PREFIX.length)));
+			if (!payload || payload.version !== 1 || !Array.isArray(payload.pages) ||
+				payload.pages.length < 1 || payload.pages.length > 12) throw new Error('invalid payload');
+			return payload;
+		}
+
+		function render() {
+			if (unloading) return;
+			try {
+				var payload = readPayload();
+				var index = Number.isInteger(payload.pageIndex) ? payload.pageIndex : 0;
+				if (index < 0 || index >= payload.pages.length) throw new Error('invalid page');
+				var page = payload.pages[index];
+				var allowed = ['summary','resources','credits','next','thanks'];
+				if (!page || allowed.indexOf(page.type) === -1) throw new Error('invalid type');
+
+				document.getElementById('card').style.display = 'flex';
+				document.getElementById('invalid').style.display = 'none';
+				var theme = payload.theme || {};
+				[['--bg',theme.background],['--panel',theme.panel],['--text',theme.text],['--accent',theme.accent]]
+					.forEach(function(pair) {
+						if (/^#[0-9a-f]{6}$/i.test(pair[1] || '')) document.documentElement.style.setProperty(pair[0], pair[1]);
+					});
+
+				document.getElementById('eyebrow').textContent = text(page.eyebrow, 50) || 'Closing Sequence';
+				document.getElementById('heading').textContent = text(page.heading, 80);
+				document.getElementById('counter').textContent = (index + 1) + ' / ' + payload.pages.length;
+				var primary = document.getElementById('primary');
+				primary.innerHTML = '';
+
+				if (page.type === 'summary') renderSummary(page, primary);
+				else if (page.type === 'resources') renderResources(page, primary);
+				else if (page.type === 'credits') renderCredits(page, primary);
+				else if (page.type === 'next') renderNext(page, primary);
+				else renderThanks(page, primary);
+			} catch (error) {
+				failClosed();
+			}
+		}
+
+		function stop() {
+			unloading = true;
+			window.removeEventListener('hashchange', render);
+		}
+
+		window.addEventListener('hashchange', render);
+		window.addEventListener('beforeunload', stop);
+		render();
+	})();
+	</script>
+</body>
+</html>
