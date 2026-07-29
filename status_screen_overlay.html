@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=device-width, initial-scale=1">
+	<title>Virtual Stage Director Status Screen</title>
+	<style>
+		:root {
+			--background: #101018;
+			--panel: #1d2330;
+			--text: #ffffff;
+			--accent: #ffd166;
+			--muted: rgba(255,255,255,.72);
+		}
+		* { box-sizing: border-box; }
+		html, body { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+		body {
+			background: transparent;
+			color: var(--text);
+			font-family: Inter, "Segoe UI", Arial, sans-serif;
+		}
+		#screen {
+			position: relative;
+			width: 100%;
+			height: 100%;
+			display: flex;
+			align-items: center;
+			justify-content: center;
+			background:
+				radial-gradient(circle at 15% 15%, rgba(255,255,255,.09), transparent 36%),
+				linear-gradient(135deg, var(--background), #07070c);
+		}
+		.ambient {
+			position: absolute;
+			width: 720px;
+			height: 720px;
+			border: 2px solid rgba(255,255,255,.16);
+			border-radius: 50%;
+			opacity: .55;
+			animation: breathe 5s ease-in-out infinite;
+		}
+		.ambient.two {
+			width: 940px;
+			height: 940px;
+			opacity: .24;
+			animation-delay: -2.5s;
+		}
+		#panel {
+			position: relative;
+			z-index: 2;
+			width: min(1360px, calc(100% - 180px));
+			min-height: 650px;
+			padding: 72px 86px;
+			border: 1px solid rgba(255,255,255,.18);
+			border-radius: 34px;
+			background: var(--panel);
+			box-shadow: 0 34px 100px rgba(0,0,0,.42);
+			display: grid;
+			grid-template-columns: 1.35fr .85fr;
+			gap: 72px;
+			align-items: center;
+		}
+		.copy { min-width: 0; }
+		.status-row { display: flex; align-items: center; gap: 18px; margin-bottom: 28px; }
+		#mode-label {
+			display: inline-flex;
+			align-items: center;
+			min-height: 44px;
+			padding: 8px 18px;
+			border-radius: 999px;
+			background: var(--accent);
+			color: #11131a;
+			font-size: 20px;
+			font-weight: 800;
+			letter-spacing: .08em;
+			text-transform: uppercase;
+		}
+		#music-status {
+			color: var(--muted);
+			font-size: 21px;
+			font-weight: 600;
+		}
+		#event-name {
+			margin: 0;
+			font-size: clamp(64px, 5.2vw, 104px);
+			line-height: .98;
+			letter-spacing: -.045em;
+			overflow-wrap: anywhere;
+		}
+		#organization {
+			margin: 24px 0 0;
+			color: var(--accent);
+			font-size: 31px;
+			font-weight: 650;
+			letter-spacing: .02em;
+		}
+		#instructions {
+			margin: 42px 0 0;
+			max-width: 900px;
+			color: var(--muted);
+			font-size: 28px;
+			line-height: 1.38;
+		}
+		#timer-block {
+			min-width: 390px;
+			padding: 48px 38px;
+			border-radius: 28px;
+			background: rgba(0,0,0,.22);
+			border: 1px solid rgba(255,255,255,.14);
+			text-align: center;
+		}
+		#countdown-label {
+			color: var(--muted);
+			font-size: 24px;
+			font-weight: 700;
+			letter-spacing: .05em;
+			text-transform: uppercase;
+		}
+		#countdown {
+			margin: 14px 0;
+			color: var(--text);
+			font-size: 104px;
+			font-variant-numeric: tabular-nums;
+			font-weight: 800;
+			line-height: 1;
+			letter-spacing: -.045em;
+		}
+		#scheduled {
+			color: var(--accent);
+			font-size: 21px;
+			line-height: 1.35;
+		}
+		#progress-track {
+			height: 7px;
+			margin-top: 28px;
+			overflow: hidden;
+			border-radius: 99px;
+			background: rgba(255,255,255,.12);
+		}
+		#progress {
+			height: 100%;
+			width: 100%;
+			border-radius: inherit;
+			background: var(--accent);
+			transition: width .25s linear;
+		}
+		#invalid {
+			position: absolute;
+			inset: 0;
+			display: none;
+			align-items: center;
+			justify-content: center;
+			background: #101018;
+			color: #ffffff;
+			font: 700 38px/1.3 "Segoe UI", sans-serif;
+		}
+		body[data-layout="lower"] #screen {
+			align-items: flex-end;
+			justify-content: stretch;
+			padding: 0 70px 70px;
+			background: transparent;
+		}
+		body[data-layout="lower"] .ambient { display: none; }
+		body[data-layout="lower"] #panel {
+			width: 100%;
+			min-height: 0;
+			padding: 38px 52px;
+			border-radius: 26px;
+			grid-template-columns: minmax(0, 1fr) auto;
+			gap: 44px;
+			background: var(--panel);
+		}
+		body[data-layout="lower"] .status-row { margin-bottom: 14px; }
+		body[data-layout="lower"] #mode-label { min-height: 36px; font-size: 16px; }
+		body[data-layout="lower"] #music-status { font-size: 17px; }
+		body[data-layout="lower"] #event-name { font-size: 54px; line-height: 1.02; }
+		body[data-layout="lower"] #organization { margin-top: 10px; font-size: 22px; }
+		body[data-layout="lower"] #instructions { margin-top: 16px; font-size: 21px; }
+		body[data-layout="lower"] #timer-block {
+			min-width: 340px;
+			padding: 22px 30px;
+			border-radius: 20px;
+		}
+		body[data-layout="lower"] #countdown-label { font-size: 17px; }
+		body[data-layout="lower"] #countdown { margin: 6px 0; font-size: 66px; }
+		body[data-layout="lower"] #scheduled { font-size: 16px; }
+		body[data-layout="lower"] #progress-track { margin-top: 14px; }
+		@keyframes breathe {
+			0%, 100% { transform: scale(.96); opacity: .28; }
+			50% { transform: scale(1.04); opacity: .58; }
+		}
+	</style>
+</head>
+<body data-layout="fullscreen">
+	<div id="screen">
+		<div class="ambient"></div>
+		<div class="ambient two"></div>
+		<main id="panel" aria-labelledby="event-name">
+			<section class="copy">
+				<div class="status-row">
+					<div id="mode-label"></div>
+					<div id="music-status"></div>
+				</div>
+				<h1 id="event-name"></h1>
+				<p id="organization"></p>
+				<p id="instructions"></p>
+			</section>
+			<section id="timer-block" aria-live="polite">
+				<div id="countdown-label"></div>
+				<div id="countdown"></div>
+				<div id="scheduled"></div>
+				<div id="progress-track"><div id="progress"></div></div>
+			</section>
+		</main>
+		<div id="invalid">Status Screen configuration unavailable</div>
+	</div>
+
+	<script>
+	(function() {
+		'use strict';
+		var PREFIX = '#vsd-status=';
+		var MODES = {
+			starting: { label: 'Starting Soon', countdown: 'Starting in', complete: 'Ready to begin', time: 'Scheduled start' },
+			intermission: { label: 'Intermission', countdown: 'Returning in', complete: 'Returning shortly', time: 'Scheduled return' },
+			brb: { label: 'Be Right Back', countdown: 'Returning in', complete: 'Returning shortly', time: 'Scheduled return' },
+			ending: { label: 'Ending Soon', countdown: 'Ending in', complete: 'Wrapping up now', time: 'Scheduled end' }
+		};
+		var timerHandle = null;
+		var unloading = false;
+		var renderGeneration = 0;
+
+		function byId(id) {
+			var element = document.getElementById(id);
+			if (!element) throw new Error('Missing required Status Screen element: ' + id);
+			return element;
+		}
+
+		function stopTimer() {
+			if (timerHandle !== null) clearInterval(timerHandle);
+			timerHandle = null;
+			renderGeneration++;
+		}
+
+		function text(value, maximum) {
+			return typeof value === 'string' ? value.trim().slice(0, maximum) : '';
+		}
+
+		function color(value, fallback) {
+			return /^#[0-9a-f]{6}$/i.test(value || '') ? value : fallback;
+		}
+
+		function validPayload(payload) {
+			if (!payload || payload.version !== 1 || !MODES[payload.mode]) return false;
+			if (payload.layout !== 'fullscreen' && payload.layout !== 'lower') return false;
+			if (!text(payload.eventName, 120)) return false;
+			if (payload.targetAt !== null && (!Number.isFinite(payload.targetAt) || payload.targetAt < 0)) return false;
+			return true;
+		}
+
+		function parsePayload() {
+			if (!window.location.hash.startsWith(PREFIX)) return null;
+			try {
+				var payload = JSON.parse(decodeURIComponent(window.location.hash.slice(PREFIX.length)));
+				return validPayload(payload) ? payload : null;
+			} catch (_) {
+				return null;
+			}
+		}
+
+		function formatRemaining(milliseconds) {
+			var total = Math.max(0, Math.ceil(milliseconds / 1000));
+			var hours = Math.floor(total / 3600);
+			var minutes = Math.floor((total % 3600) / 60);
+			var seconds = total % 60;
+			var pair = function(value) { return String(value).padStart(2, '0'); };
+			return hours > 0 ? pair(hours) + ':' + pair(minutes) + ':' + pair(seconds)
+				: pair(minutes) + ':' + pair(seconds);
+		}
+
+		function formatTarget(targetAt) {
+			return new Intl.DateTimeFormat(undefined, {
+				weekday: 'short', hour: 'numeric', minute: '2-digit', timeZoneName: 'short'
+			}).format(new Date(targetAt));
+		}
+
+		function failClosed() {
+			stopTimer();
+			byId('panel').style.display = 'none';
+			byId('invalid').style.display = 'flex';
+		}
+
+		function render() {
+			stopTimer();
+			if (unloading) return;
+			var payload = parsePayload();
+			if (!payload) {
+				failClosed();
+				return;
+			}
+
+			var generation = renderGeneration;
+			var mode = MODES[payload.mode];
+			var theme = payload.theme || {};
+			document.body.dataset.layout = payload.layout;
+			document.documentElement.style.setProperty('--background', color(theme.background, '#101018'));
+			document.documentElement.style.setProperty('--panel', color(theme.panel, '#1d2330'));
+			document.documentElement.style.setProperty('--text', color(theme.text, '#ffffff'));
+			document.documentElement.style.setProperty('--accent', color(theme.accent, '#ffd166'));
+			byId('panel').style.display = 'grid';
+			byId('invalid').style.display = 'none';
+			byId('mode-label').textContent = mode.label;
+			byId('event-name').textContent = text(payload.eventName, 120);
+
+			var organization = text(payload.organization, 120);
+			byId('organization').textContent = organization;
+			byId('organization').style.display = organization ? 'block' : 'none';
+			var instructions = text(payload.instructions, 240);
+			byId('instructions').textContent = instructions;
+			byId('instructions').style.display = instructions ? 'block' : 'none';
+
+			var music = payload.musicStatus === 'playing' ? '♫ Music playing'
+				: payload.musicStatus === 'paused' ? '♫ Music paused' : '';
+			byId('music-status').textContent = music;
+			byId('music-status').style.display = music ? 'block' : 'none';
+
+			if (payload.targetAt === null) {
+				byId('timer-block').style.display = 'none';
+				return;
+			}
+			byId('timer-block').style.display = 'block';
+			byId('scheduled').textContent = mode.time + ': ' + formatTarget(payload.targetAt);
+			var initialRemaining = Math.max(1, Number(payload.initialDurationMs) || payload.targetAt - Date.now());
+
+			function updateCountdown() {
+				if (unloading || generation !== renderGeneration) return;
+				var remaining = payload.targetAt - Date.now();
+				if (remaining <= 0) {
+					byId('countdown-label').textContent = mode.complete;
+					byId('countdown').textContent = '00:00';
+					byId('progress').style.width = '0%';
+					if (timerHandle !== null) clearInterval(timerHandle);
+					timerHandle = null;
+					return;
+				}
+				byId('countdown-label').textContent = mode.countdown;
+				byId('countdown').textContent = formatRemaining(remaining);
+				byId('progress').style.width =
+					Math.max(0, Math.min(100, remaining / initialRemaining * 100)).toFixed(2) + '%';
+			}
+
+			updateCountdown();
+			if (payload.targetAt > Date.now()) timerHandle = setInterval(updateCountdown, 250);
+		}
+
+		function unload() {
+			if (unloading) return;
+			unloading = true;
+			stopTimer();
+			window.removeEventListener('hashchange', render);
+		}
+
+		window.addEventListener('hashchange', render);
+		window.addEventListener('beforeunload', unload);
+		render();
+	})();
+	</script>
+</body>
+</html>
