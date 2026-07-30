@@ -1,0 +1,369 @@
+<!DOCTYPE html>
+<!--
+	Virtual Stage Director — Resource and Download Card
+	Canonical deployment:
+	https://thediarmanimethod.github.io/Virtual-Stage-Director-Overlays/resource_card_overlay.html
+
+	QR generation uses qrcode-generator by Kazuhiko Arase (MIT), loaded from
+	the same reviewed GitHub Pages repository. No third-party QR service is used.
+-->
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=1920,height=1080">
+	<title>Virtual Stage Director Resource Card</title>
+	<style>
+		:root { --background:#101018; --panel:#1d2330; --text:#fff; --accent:#ffd166; }
+		* { box-sizing:border-box; }
+		html, body { width:1920px; height:1080px; margin:0; overflow:hidden;
+			background:transparent; color:var(--text); font-family:Inter,"Segoe UI",Arial,sans-serif; }
+		body { padding:74px 90px; }
+		#stage { width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
+		#card { position:relative; width:min(1560px,100%); min-height:700px; padding:66px 72px 58px;
+			overflow:hidden; border:3px solid var(--accent); border-radius:38px;
+			background:var(--background); box-shadow:0 32px 90px rgba(0,0,0,.48); }
+		#card::before { content:""; position:absolute; inset:14px; border-radius:28px;
+			background:var(--panel); }
+		#content { position:relative; display:grid; grid-template-columns:minmax(0,1fr);
+			align-items:center; gap:64px; min-height:570px; }
+		#content.with-qr { grid-template-columns:minmax(0,1fr) 380px; }
+		#copy { min-width:0; transition:opacity .16s ease, transform .16s ease; }
+		#copy.fade-out { opacity:0; transform:translateY(10px); }
+		#eyebrow { margin:0 0 16px; color:var(--text); font-size:24px; font-weight:850;
+			letter-spacing:.15em; text-transform:uppercase; }
+		#title { margin:0 0 24px; max-width:1060px; font-size:70px; line-height:1.04;
+			letter-spacing:-.025em; overflow-wrap:anywhere; }
+		#description { margin:0 0 28px; max-width:1060px; font-size:34px; line-height:1.38;
+			white-space:pre-wrap; overflow-wrap:anywhere; }
+		#url { display:block; margin:0 0 28px; padding:17px 21px; border-left:7px solid var(--accent);
+			border-radius:0 14px 14px 0; background:rgba(255,255,255,.065); color:var(--text);
+			font-size:25px; line-height:1.28; font-weight:720; overflow-wrap:anywhere; }
+		#meta { display:flex; flex-wrap:wrap; gap:14px; }
+		.meta-item { min-width:250px; padding:15px 19px; border:1px solid rgba(255,255,255,.18);
+			border-radius:14px; background:rgba(255,255,255,.045); }
+		.meta-label { display:block; margin-bottom:5px; color:var(--text); opacity:.78;
+			font-size:17px; font-weight:800; letter-spacing:.1em; text-transform:uppercase; }
+		.meta-value { display:block; font-size:27px; font-weight:720; overflow-wrap:anywhere; }
+		#qr-panel { display:none; text-align:center; }
+		#qr-panel.visible { display:block; }
+		#qr { width:350px; height:350px; margin:0 auto 15px; padding:16px; background:#fff; display:grid; }
+		.qr-row { display:flex; flex:1; }
+		.qr-cell { flex:1; }
+		.qr-cell.dark { background:#000; }
+		.qr-cell.light { background:#fff; }
+		#scan-label { color:var(--text); font-size:22px; font-weight:750; }
+		#counter { position:absolute; right:42px; bottom:28px; color:var(--text); opacity:.7;
+			font-size:22px; font-weight:750; letter-spacing:.08em; }
+		#invalid { display:none; padding:24px 30px; border-radius:18px; background:#7b1e28;
+			color:#fff; font-size:32px; }
+		@media (prefers-reduced-motion:no-preference) {
+			#card { animation:arrive .42s ease-out both; }
+			@keyframes arrive {
+				from { opacity:0; transform:translateY(24px) scale(.985); }
+				to { opacity:1; transform:none; }
+			}
+		}
+	</style>
+</head>
+<body>
+	<main id="stage" aria-live="polite">
+		<section id="card" aria-labelledby="title">
+			<div id="content">
+				<div id="copy">
+					<p id="eyebrow">Session resource</p>
+					<h1 id="title"></h1>
+					<p id="description"></p>
+					<div id="url"></div>
+					<div id="meta">
+						<div id="access" class="meta-item">
+							<span class="meta-label">Access code</span>
+							<span id="access-value" class="meta-value"></span>
+						</div>
+						<div class="meta-item">
+							<span class="meta-label">Availability</span>
+							<span id="availability-value" class="meta-value"></span>
+						</div>
+					</div>
+				</div>
+				<aside id="qr-panel" aria-label="QR code">
+					<div id="qr"></div>
+					<div id="scan-label">Scan to open</div>
+				</aside>
+			</div>
+			<div id="counter" aria-label="Resource number"></div>
+		</section>
+		<div id="invalid">Resource card data is unavailable.</div>
+	</main>
+
+	<script src="qrcode.js"></script>
+	<script>
+	(function() {
+		'use strict';
+		var PREFIX = '#vsd-resource-card=';
+		var MAX_FRAGMENT = 45000;
+		var FADE_MS = 160;
+		var state = null;
+		var renderedIndex = -1;
+		var pendingIndex = null;
+		var transitionTimer = null;
+		var ws = null;
+		var reconnectTimer = null;
+		var unloading = false;
+		var authenticationBlocked = false;
+		var copy = document.getElementById('copy');
+
+		function text(value, maximum) {
+			return typeof value === 'string' ? value.trim().slice(0, maximum) : '';
+		}
+
+		function httpsUrl(value) {
+			try {
+				var parsed = new URL(value);
+				if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null;
+				return parsed;
+			} catch (_) {
+				return null;
+			}
+		}
+
+		function validHex(value, fallback) {
+			return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+		}
+
+		function validateResource(resource) {
+			if (!resource || !text(resource.title, 100) || !text(resource.description, 240) ||
+				!text(resource.availability, 120) || !httpsUrl(resource.url)) return null;
+			return {
+				title: text(resource.title, 100),
+				description: text(resource.description, 240),
+				url: httpsUrl(resource.url).href,
+				accessCode: text(resource.accessCode, 80),
+				availability: text(resource.availability, 120),
+				qr: resource.qr === true
+			};
+		}
+
+		function readPayload() {
+			var hash = String(window.location.hash || '');
+			if (hash.length > MAX_FRAGMENT || hash.indexOf(PREFIX) !== 0) throw new Error('invalid fragment');
+			var payload = JSON.parse(decodeURIComponent(hash.slice(PREFIX.length)));
+			if (!payload || payload.version !== 1 || typeof payload.sessionId !== 'string' ||
+				!Array.isArray(payload.resources) || payload.resources.length < 1 ||
+				payload.resources.length > 10) throw new Error('invalid payload');
+			var resources = payload.resources.map(validateResource);
+			if (resources.some(function(resource) { return !resource; })) throw new Error('invalid resource');
+			var currentIndex = Number.isInteger(payload.currentIndex) ? payload.currentIndex : 0;
+			if (currentIndex < 0 || currentIndex >= resources.length) throw new Error('invalid index');
+			return {
+				sessionId: text(payload.sessionId, 120),
+				resources: resources,
+				currentIndex: currentIndex,
+				theme: payload.theme || {}
+			};
+		}
+
+		function renderQr(url) {
+			var container = document.getElementById('qr');
+			container.innerHTML = '';
+			var qr = qrcode(0, 'M');
+			qr.addData(url, 'Byte');
+			qr.make();
+			var count = qr.getModuleCount();
+			container.style.gridTemplateRows = 'repeat(' + count + ',1fr)';
+			for (var row = 0; row < count; row++) {
+				var rowElement = document.createElement('div');
+				rowElement.className = 'qr-row';
+				for (var column = 0; column < count; column++) {
+					var cell = document.createElement('div');
+					cell.className = 'qr-cell ' + (qr.isDark(row, column) ? 'dark' : 'light');
+					rowElement.appendChild(cell);
+				}
+				container.appendChild(rowElement);
+			}
+		}
+
+		function persistIndex() {
+			if (!state || !state.sessionId || typeof localStorage === 'undefined') return;
+			try {
+				localStorage.setItem('vsd-resource-card-index:' + state.sessionId,
+					String(state.currentIndex));
+			} catch (_) {}
+		}
+
+		function restoreIndex(payload) {
+			if (!payload.sessionId || typeof localStorage === 'undefined') return payload.currentIndex;
+			try {
+				var stored = Number(localStorage.getItem(
+					'vsd-resource-card-index:' + payload.sessionId));
+				if (Number.isInteger(stored) && stored >= 0 &&
+					stored < payload.resources.length) return stored;
+			} catch (_) {}
+			return payload.currentIndex;
+		}
+
+		function render(index) {
+			if (!state || index < 0 || index >= state.resources.length) throw new Error('invalid index');
+			var resource = state.resources[index];
+			document.getElementById('card').style.display = 'block';
+			document.getElementById('invalid').style.display = 'none';
+			document.getElementById('title').textContent = resource.title;
+			document.getElementById('description').textContent = resource.description;
+			document.getElementById('url').textContent = resource.url;
+			document.getElementById('availability-value').textContent = resource.availability;
+			var access = document.getElementById('access');
+			access.style.display = resource.accessCode ? 'block' : 'none';
+			document.getElementById('access-value').textContent = resource.accessCode;
+			var qrPanel = document.getElementById('qr-panel');
+			qrPanel.className = resource.qr ? 'visible' : '';
+			document.getElementById('content').className = resource.qr ? 'with-qr' : '';
+			if (resource.qr) renderQr(resource.url);
+			document.getElementById('counter').textContent =
+				(index + 1) + ' / ' + state.resources.length;
+			renderedIndex = index;
+			persistIndex();
+		}
+
+		function cancelTransition() {
+			if (transitionTimer !== null) {
+				clearTimeout(transitionTimer);
+				transitionTimer = null;
+			}
+			pendingIndex = null;
+			if (copy) copy.classList.remove('fade-out');
+		}
+
+		function reducedMotionRequested() {
+			return typeof window.matchMedia === 'function' &&
+				window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		}
+
+		function navigateTo(index) {
+			if (!state || !Number.isInteger(index) || index < 0 ||
+				index >= state.resources.length) return;
+			if (index === state.currentIndex && transitionTimer === null && renderedIndex === index) return;
+			state.currentIndex = index;
+			persistIndex();
+			if (reducedMotionRequested()) {
+				cancelTransition();
+				render(index);
+				return;
+			}
+			pendingIndex = index;
+			copy.classList.add('fade-out');
+			if (transitionTimer !== null) return;
+			transitionTimer = setTimeout(function() {
+				transitionTimer = null;
+				if (unloading || !state || pendingIndex === null) return;
+				var nextIndex = pendingIndex;
+				pendingIndex = null;
+				render(nextIndex);
+				void copy.offsetHeight;
+				copy.classList.remove('fade-out');
+			}, FADE_MS);
+		}
+
+		function failClosed() {
+			cancelTransition();
+			state = null;
+			renderedIndex = -1;
+			document.getElementById('card').style.display = 'none';
+			document.getElementById('invalid').style.display = 'block';
+		}
+
+		function loadPayload() {
+			if (unloading) return;
+			try {
+				cancelTransition();
+				state = readPayload();
+				state.currentIndex = restoreIndex(state);
+				var theme = state.theme;
+				[
+					['--background',validHex(theme.background,'#101018')],
+					['--panel',validHex(theme.panel,'#1d2330')],
+					['--text',validHex(theme.text,'#ffffff')],
+					['--accent',validHex(theme.accent,'#ffd166')]
+				].forEach(function(pair) {
+					document.documentElement.style.setProperty(pair[0], pair[1]);
+				});
+				render(state.currentIndex);
+				connect();
+			} catch (_) {
+				failClosed();
+			}
+		}
+
+		function scheduleReconnect(socket) {
+			if (unloading || authenticationBlocked || ws !== socket || reconnectTimer !== null) return;
+			var timer = setTimeout(function() {
+				if (reconnectTimer !== timer) return;
+				reconnectTimer = null;
+				if (unloading || ws !== socket) return;
+				ws = null;
+				connect();
+			}, 2000);
+			reconnectTimer = timer;
+		}
+
+		function connect() {
+			if (unloading || authenticationBlocked || !state || !state.sessionId ||
+				reconnectTimer !== null) return;
+			if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+			var socket = new WebSocket('ws://127.0.0.1:4455');
+			ws = socket;
+			socket.onmessage = function(event) {
+				if (unloading || authenticationBlocked || ws !== socket) return;
+				var msg;
+				try { msg = JSON.parse(event.data); } catch (_) { return; }
+				if (msg.op === 0) {
+					if (msg.d && Object.prototype.hasOwnProperty.call(msg.d, 'authentication')) {
+						authenticationBlocked = true;
+						try { socket.close(); } catch (_) {}
+						return;
+					}
+					socket.send(JSON.stringify({ op:1, d:{ rpcVersion:1, eventSubscriptions:1 } }));
+					return;
+				}
+				if (msg.op !== 5 || !msg.d || msg.d.eventType !== 'CustomEvent') return;
+				var data = msg.d.eventData;
+				if (!data || data.type !== 'resource_card_state' || !state ||
+					data.sessionId !== state.sessionId || !Number.isInteger(data.currentIndex) ||
+					data.currentIndex < 0 || data.currentIndex >= state.resources.length) return;
+				navigateTo(data.currentIndex);
+			};
+			socket.onerror = function() {
+				if (unloading || ws !== socket) return;
+				try { socket.close(); } catch (_) {}
+				scheduleReconnect(socket);
+			};
+			socket.onclose = function() {
+				if (unloading || ws !== socket) return;
+				scheduleReconnect(socket);
+			};
+		}
+
+		function stop() {
+			if (unloading) return;
+			unloading = true;
+			cancelTransition();
+			if (reconnectTimer !== null) {
+				clearTimeout(reconnectTimer);
+				reconnectTimer = null;
+			}
+			var socket = ws;
+			ws = null;
+			if (socket) {
+				socket.onmessage = null;
+				socket.onerror = null;
+				socket.onclose = null;
+				try { socket.close(); } catch (_) {}
+			}
+			window.removeEventListener('hashchange', loadPayload);
+		}
+
+		window.addEventListener('hashchange', loadPayload);
+		window.addEventListener('beforeunload', stop);
+		loadPayload();
+	})();
+	</script>
+</body>
+</html>
