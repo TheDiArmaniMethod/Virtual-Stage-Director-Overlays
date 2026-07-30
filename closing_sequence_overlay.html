@@ -25,6 +25,7 @@
 		#content.with-aside { grid-template-columns:minmax(0,1fr) 360px; align-items:center; gap:58px; }
 		#primary { min-width:0; }
 		#primary p { margin:0 0 20px; white-space:pre-wrap; overflow-wrap:anywhere; }
+		#primary p.summary-sentence { padding-top:26px; }
 		ul { margin:0; padding:0; list-style:none; display:grid; gap:17px; }
 		li { position:relative; padding-left:38px; overflow-wrap:anywhere; }
 		li::before { content:""; position:absolute; left:0; top:.55em; width:13px; height:13px; border-radius:50%; background:var(--accent); }
@@ -150,7 +151,7 @@
 				appendText(list, 'li', text(item, 140));
 			});
 			if (list.children.length) primary.appendChild(list);
-			if (page.sentence) appendText(primary, 'p', text(page.sentence, 240));
+			if (page.sentence) appendText(primary, 'p', text(page.sentence, 240), 'summary-sentence');
 			showAside('', '');
 		}
 
