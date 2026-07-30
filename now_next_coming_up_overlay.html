@@ -1,0 +1,179 @@
+<!DOCTYPE html>
+<!--
+	Virtual Stage Director v1.6.10.45
+	Now / Next / Coming Up
+
+	Content is loaded from the private #vsd-now-next fragment. The page is
+	static after initialization and does not open its own OBS WebSocket.
+-->
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=1920, height=1080">
+	<title>Now / Next / Coming Up</title>
+	<style>
+		* { box-sizing: border-box; }
+		html, body { width: 1920px; height: 1080px; margin: 0; overflow: hidden;
+			background: transparent; font-family: Arial, Helvetica, sans-serif; }
+		#transition-panel {
+			position: fixed;
+			top: 155px;
+			width: 760px;
+			padding: 34px;
+			border-radius: 22px;
+			background: rgba(29, 35, 48, 0.92);
+			box-shadow: 0 18px 70px rgba(0, 0, 0, 0.48);
+			opacity: 0;
+			transform: translateX(-80px);
+			transition: opacity 0.45s ease, transform 0.55s cubic-bezier(.2,.75,.25,1);
+		}
+		#transition-panel.left { left: 80px; }
+		#transition-panel.right { right: 80px; transform: translateX(80px); }
+		#transition-panel.ready { opacity: 1; transform: translateX(0); }
+		.transition-row {
+			display: grid;
+			grid-template-columns: 140px minmax(0, 1fr);
+			align-items: center;
+			min-height: 116px;
+			padding: 20px 24px;
+			border: 2px solid transparent;
+			border-radius: 16px;
+		}
+		.transition-row + .transition-row {
+			margin-top: 10px;
+			background: rgba(255,255,255,0.045);
+		}
+		.transition-row.now {
+			background: rgba(255,255,255,0.08);
+			transform: translateX(8px);
+		}
+		.transition-label {
+			font-size: 17px;
+			line-height: 1;
+			font-weight: 850;
+			letter-spacing: 0.12em;
+			text-transform: uppercase;
+			opacity: 0.72;
+		}
+		.transition-row.now .transition-label { opacity: 1; }
+		.transition-value {
+			font-size: 31px;
+			line-height: 1.15;
+			font-weight: 700;
+			overflow-wrap: anywhere;
+		}
+		.transition-row.now .transition-value {
+			font-size: 38px;
+			font-weight: 800;
+		}
+		#configuration-error {
+			display: none;
+			position: fixed;
+			left: 50%;
+			top: 50%;
+			transform: translate(-50%, -50%);
+			padding: 22px 30px;
+			border-radius: 12px;
+			background: rgba(20,20,20,0.94);
+			color: #fff;
+			font-size: 28px;
+		}
+	</style>
+</head>
+<body>
+	<section id="transition-panel" aria-label="Now, next, and coming up">
+		<div id="now-row" class="transition-row now">
+			<div class="transition-label">Now</div>
+			<div id="now-value" class="transition-value"></div>
+		</div>
+		<div id="next-row" class="transition-row">
+			<div class="transition-label">Next</div>
+			<div id="next-value" class="transition-value"></div>
+		</div>
+		<div id="coming-up-row" class="transition-row">
+			<div class="transition-label">Coming Up</div>
+			<div id="coming-up-value" class="transition-value"></div>
+		</div>
+	</section>
+	<div id="configuration-error">Now / Next configuration unavailable</div>
+
+<script>
+(function() {
+	'use strict';
+
+	const PREFIX = '#vsd-now-next=';
+	const panel = document.getElementById('transition-panel');
+	const errorElement = document.getElementById('configuration-error');
+	const nowElement = document.getElementById('now-value');
+	const nextElement = document.getElementById('next-value');
+	const comingUpElement = document.getElementById('coming-up-value');
+
+	function validHex(value, fallback) {
+		return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+	}
+
+	function hexToRgba(hex, opacity) {
+		const value = validHex(hex, '#1d2330').slice(1);
+		const red = parseInt(value.slice(0, 2), 16);
+		const green = parseInt(value.slice(2, 4), 16);
+		const blue = parseInt(value.slice(4, 6), 16);
+		return 'rgba(' + red + ',' + green + ',' + blue + ',' + opacity + ')';
+	}
+
+	function boundedText(value) {
+		return typeof value === 'string' ? value.trim().slice(0, 100) : '';
+	}
+
+	function readPayload() {
+		if (!window.location.hash.startsWith(PREFIX)) return null;
+		try {
+			const payload = JSON.parse(decodeURIComponent(window.location.hash.slice(PREFIX.length)));
+			if (!payload || payload.version !== 1) return null;
+			const now = boundedText(payload.now);
+			const next = boundedText(payload.next);
+			const comingUp = boundedText(payload.comingUp);
+			if (!now || !next || !comingUp) return null;
+			return {
+				now: now,
+				next: next,
+				comingUp: comingUp,
+				position: payload.position === 'right' ? 'right' : 'left',
+				theme: payload.theme || {}
+			};
+		} catch (_) {
+			return null;
+		}
+	}
+
+	const state = readPayload();
+	if (!state) {
+		errorElement.style.display = 'block';
+		return;
+	}
+
+	const theme = {
+		panel: validHex(state.theme.panel, '#1d2330'),
+		text: validHex(state.theme.text, '#ffffff'),
+		active: validHex(state.theme.active, '#ffd166'),
+		panelOpacity: Number.isFinite(state.theme.panelOpacity) ?
+			Math.max(0.65, Math.min(1, state.theme.panelOpacity)) : 0.92
+	};
+
+	panel.classList.add(state.position);
+	panel.style.background = hexToRgba(theme.panel, theme.panelOpacity);
+	panel.style.color = theme.text;
+	const nowRow = document.getElementById('now-row');
+	nowRow.style.borderColor = theme.active;
+	nowRow.style.background = hexToRgba(theme.active, 0.18);
+	nowRow.style.color = theme.active;
+	nowElement.textContent = state.now;
+	nextElement.textContent = state.next;
+	comingUpElement.textContent = state.comingUp;
+
+	requestAnimationFrame(function() {
+		requestAnimationFrame(function() { panel.classList.add('ready'); });
+	});
+})();
+</script>
+</body>
+</html>
