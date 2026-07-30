@@ -1,0 +1,306 @@
+<!DOCTYPE html>
+<!--
+	Virtual Stage Director v1.6.10.42
+	Agenda and Progress Tracker
+
+	Content is loaded once from #vsd-agenda. Next, Previous, Complete, and Reset
+	use OBS BroadcastCustomEvent messages and never reload the Browser Source.
+-->
+<html lang="en">
+<head>
+	<meta charset="UTF-8">
+	<meta name="viewport" content="width=1920, height=1080">
+	<title>Agenda and Progress Tracker</title>
+	<style>
+		* { box-sizing: border-box; }
+		html, body { width: 1920px; height: 1080px; margin: 0; overflow: hidden;
+			background: transparent; font-family: Arial, Helvetica, sans-serif; }
+		#agenda-panel {
+			position: fixed;
+			top: 90px;
+			width: 650px;
+			max-height: 900px;
+			padding: 42px 42px 38px;
+			border-radius: 22px;
+			background: rgba(29, 35, 48, 0.92);
+			box-shadow: 0 18px 70px rgba(0, 0, 0, 0.48);
+			opacity: 0;
+			transform: translateX(-80px);
+			transition: opacity 0.45s ease, transform 0.55s cubic-bezier(.2,.75,.25,1);
+		}
+		#agenda-panel.left { left: 80px; }
+		#agenda-panel.right { right: 80px; transform: translateX(80px); }
+		#agenda-panel.ready { opacity: 1; transform: translateX(0); }
+		.header-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+		.eyebrow { margin: 0 0 8px; font-size: 18px; font-weight: 800; letter-spacing: 0.18em;
+			text-transform: uppercase; opacity: 0.68; }
+		#agenda-title { margin: 0; font-size: 48px; line-height: 1.05; font-weight: 800;
+			overflow-wrap: anywhere; }
+		#progress-label { flex: 0 0 auto; padding-bottom: 5px; font-size: 19px; font-weight: 700;
+			white-space: nowrap; opacity: 0.76; }
+		.progress-track { height: 8px; margin: 24px 0 26px; overflow: hidden;
+			border-radius: 999px; background: rgba(255,255,255,0.14); }
+		#progress-fill { width: 0; height: 100%; border-radius: inherit;
+			transition: width 0.35s ease; }
+		#agenda-list { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+		.agenda-item {
+			display: grid;
+			grid-template-columns: 46px minmax(0, 1fr);
+			align-items: center;
+			min-height: 60px;
+			padding: 9px 15px 9px 10px;
+			border: 2px solid transparent;
+			border-radius: 13px;
+			background: rgba(255,255,255,0.045);
+			transition: background 0.28s ease, border-color 0.28s ease,
+				opacity 0.28s ease, transform 0.28s ease;
+		}
+		.agenda-item.active { transform: translateX(8px); }
+		.agenda-item.completed:not(.active) { opacity: 0.72; }
+		.item-marker {
+			display: grid;
+			place-items: center;
+			width: 34px;
+			height: 34px;
+			border: 2px solid currentColor;
+			border-radius: 50%;
+			font-size: 17px;
+			font-weight: 800;
+			transition: color 0.28s ease, background 0.28s ease;
+		}
+		.item-label { font-size: 27px; line-height: 1.18; font-weight: 650; overflow-wrap: anywhere; }
+		#configuration-error { display: none; position: fixed; left: 50%; top: 50%;
+			transform: translate(-50%, -50%); padding: 22px 30px; border-radius: 12px;
+			background: rgba(20,20,20,0.94); color: #fff; font-size: 28px; }
+	</style>
+</head>
+<body>
+	<section id="agenda-panel" aria-label="Agenda and progress">
+		<div class="header-row">
+			<div>
+				<p class="eyebrow">Session progress</p>
+				<h1 id="agenda-title">Agenda</h1>
+			</div>
+			<div id="progress-label"></div>
+		</div>
+		<div class="progress-track"><div id="progress-fill"></div></div>
+		<ol id="agenda-list"></ol>
+	</section>
+	<div id="configuration-error">Agenda configuration unavailable</div>
+
+<script>
+(function() {
+	'use strict';
+
+	const PREFIX = '#vsd-agenda=';
+	const panel = document.getElementById('agenda-panel');
+	const titleElement = document.getElementById('agenda-title');
+	const labelElement = document.getElementById('progress-label');
+	const fillElement = document.getElementById('progress-fill');
+	const listElement = document.getElementById('agenda-list');
+	const errorElement = document.getElementById('configuration-error');
+
+	function validHex(value, fallback) {
+		return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+	}
+
+	function hexToRgba(hex, opacity) {
+		const value = validHex(hex, '#1d2330').slice(1);
+		const red = parseInt(value.slice(0, 2), 16);
+		const green = parseInt(value.slice(2, 4), 16);
+		const blue = parseInt(value.slice(4, 6), 16);
+		return 'rgba(' + red + ',' + green + ',' + blue + ',' + opacity + ')';
+	}
+
+	function readPayload() {
+		if (!window.location.hash.startsWith(PREFIX)) return null;
+		try {
+			const payload = JSON.parse(decodeURIComponent(window.location.hash.slice(PREFIX.length)));
+			if (!payload || payload.version !== 1 || typeof payload.sessionId !== 'string' ||
+				!Array.isArray(payload.items) || payload.items.length < 1 || payload.items.length > 10) return null;
+			const items = payload.items.map(function(item) {
+				return typeof item === 'string' ? item.trim().slice(0, 100) : '';
+			}).filter(Boolean);
+			if (items.length === 0) return null;
+			return {
+				sessionId: payload.sessionId.slice(0, 120),
+				title: typeof payload.title === 'string' && payload.title.trim() ?
+					payload.title.trim().slice(0, 60) : 'Agenda',
+				items: items,
+				currentIndex: Number.isInteger(payload.currentIndex) ?
+					Math.max(0, Math.min(items.length - 1, payload.currentIndex)) : 0,
+				completed: items.map(function(_, index) {
+					return Array.isArray(payload.completed) && payload.completed[index] === true;
+				}),
+				position: payload.position === 'right' ? 'right' : 'left',
+				theme: payload.theme || {}
+			};
+		} catch (_) {
+			return null;
+		}
+	}
+
+	const state = readPayload();
+	if (!state) {
+		errorElement.style.display = 'block';
+		return;
+	}
+
+	const storageKey = 'vsd-agenda-state:' + state.sessionId;
+	try {
+		if (typeof localStorage !== 'undefined') {
+			const stored = JSON.parse(localStorage.getItem(storageKey) || 'null');
+			if (stored && Number.isInteger(stored.currentIndex) &&
+				stored.currentIndex >= 0 && stored.currentIndex < state.items.length &&
+				Array.isArray(stored.completed)) {
+				state.currentIndex = stored.currentIndex;
+				state.completed = state.items.map(function(_, index) {
+					return stored.completed[index] === true;
+				});
+			}
+		}
+	} catch (_) {}
+
+	const theme = {
+		panel: validHex(state.theme.panel, '#1d2330'),
+		text: validHex(state.theme.text, '#ffffff'),
+		active: validHex(state.theme.active, '#ffd166'),
+		complete: validHex(state.theme.complete, '#7bd389'),
+		panelOpacity: Number.isFinite(state.theme.panelOpacity) ?
+			Math.max(0.65, Math.min(1, state.theme.panelOpacity)) : 0.92
+	};
+
+	panel.classList.add(state.position);
+	panel.style.background = hexToRgba(theme.panel, theme.panelOpacity);
+	panel.style.color = theme.text;
+	titleElement.textContent = state.title;
+	fillElement.style.background = theme.active;
+
+	const rows = state.items.map(function(item, index) {
+		const row = document.createElement('li');
+		row.className = 'agenda-item';
+		const marker = document.createElement('span');
+		marker.className = 'item-marker';
+		const label = document.createElement('span');
+		label.className = 'item-label';
+		label.textContent = item;
+		row.appendChild(marker);
+		row.appendChild(label);
+		listElement.appendChild(row);
+		return { row: row, marker: marker };
+	});
+
+	function render() {
+		try {
+			if (typeof localStorage !== 'undefined') {
+				localStorage.setItem(storageKey, JSON.stringify({
+					currentIndex: state.currentIndex,
+					completed: state.completed
+				}));
+			}
+		} catch (_) {}
+		const completedCount = state.completed.filter(Boolean).length;
+		labelElement.textContent = 'Step ' + (state.currentIndex + 1) + ' of ' + state.items.length +
+			' · ' + completedCount + ' complete';
+		fillElement.style.width = (((state.currentIndex + 1) / state.items.length) * 100).toFixed(2) + '%';
+
+		rows.forEach(function(parts, index) {
+			const active = index === state.currentIndex;
+			const completed = state.completed[index] === true;
+			parts.row.classList.toggle('active', active);
+			parts.row.classList.toggle('completed', completed);
+			parts.row.style.borderColor = active ? theme.active : 'transparent';
+			parts.row.style.background = active ? hexToRgba(theme.active, 0.18) :
+				'rgba(255,255,255,0.045)';
+			parts.marker.textContent = completed ? '✓' : String(index + 1);
+			parts.marker.style.color = completed ? theme.complete : (active ? theme.active : theme.text);
+			parts.marker.style.background = completed ? hexToRgba(theme.complete, 0.14) : 'transparent';
+		});
+	}
+
+	render();
+	requestAnimationFrame(function() {
+		requestAnimationFrame(function() { panel.classList.add('ready'); });
+	});
+
+	let ws = null;
+	let reconnectTimer = null;
+	let unloading = false;
+	let authenticationBlocked = false;
+
+	function scheduleReconnect(socket) {
+		if (unloading || authenticationBlocked || ws !== socket || reconnectTimer !== null) return;
+		const timer = setTimeout(function() {
+			if (reconnectTimer !== timer) return;
+			reconnectTimer = null;
+			if (unloading || ws !== socket) return;
+			ws = null;
+			connect();
+		}, 2000);
+		reconnectTimer = timer;
+	}
+
+	function connect() {
+		if (unloading || authenticationBlocked || reconnectTimer !== null) return;
+		if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+		const socket = new WebSocket('ws://127.0.0.1:4455');
+		ws = socket;
+
+		socket.onmessage = function(event) {
+			if (unloading || authenticationBlocked || ws !== socket) return;
+			let msg;
+			try { msg = JSON.parse(event.data); } catch (_) { return; }
+			if (msg.op === 0) {
+				if (msg.d && Object.prototype.hasOwnProperty.call(msg.d, 'authentication')) {
+					authenticationBlocked = true;
+					try { socket.close(); } catch (_) {}
+					return;
+				}
+				socket.send(JSON.stringify({ op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 } }));
+				return;
+			}
+			if (msg.op !== 5 || !msg.d || msg.d.eventType !== 'CustomEvent') return;
+			const data = msg.d.eventData;
+			if (!data || data.type !== 'agenda_state' || data.sessionId !== state.sessionId ||
+				!Number.isInteger(data.currentIndex) || data.currentIndex < 0 ||
+				data.currentIndex >= state.items.length || !Array.isArray(data.completed)) return;
+			state.currentIndex = data.currentIndex;
+			state.completed = state.items.map(function(_, index) {
+				return data.completed[index] === true;
+			});
+			render();
+		};
+		socket.onerror = function() {
+			if (unloading || ws !== socket) return;
+			try { socket.close(); } catch (_) {}
+			scheduleReconnect(socket);
+		};
+		socket.onclose = function() {
+			if (unloading || ws !== socket) return;
+			scheduleReconnect(socket);
+		};
+	}
+
+	function stop() {
+		if (unloading) return;
+		unloading = true;
+		if (reconnectTimer !== null) {
+			clearTimeout(reconnectTimer);
+			reconnectTimer = null;
+		}
+		const socket = ws;
+		ws = null;
+		if (socket) {
+			socket.onmessage = null;
+			socket.onerror = null;
+			socket.onclose = null;
+			try { socket.close(); } catch (_) {}
+		}
+	}
+
+	window.addEventListener('beforeunload', stop);
+	connect();
+})();
+</script>
+</body>
+</html>
