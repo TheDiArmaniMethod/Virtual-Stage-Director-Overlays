@@ -1,0 +1,630 @@
+<!DOCTYPE html>
+<!--
+	Virtual Stage Director v1.6.10.47
+	Session Objective / Learning Outcome
+
+	Prepared content is loaded from #vsd-session-objective. Navigation, completion,
+	recap, and reset use session-scoped OBS BroadcastCustomEvent messages.
+-->
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=1920,height=1080">
+	<title>Session Objective / Learning Outcome</title>
+	<style>
+		:root {
+			--panel: #1d2330;
+			--text: #ffffff;
+			--accent: #ffd166;
+			--complete: #7bd389;
+			--panel-opacity: 0.94;
+		}
+		* { box-sizing: border-box; }
+		html, body {
+			width: 1920px;
+			height: 1080px;
+			margin: 0;
+			overflow: hidden;
+			background: transparent;
+			font-family: Arial, Helvetica, sans-serif;
+		}
+		body { color: var(--text); }
+		#objective-shell {
+			position: fixed;
+			inset: 0;
+			display: grid;
+			place-items: center;
+			padding: 72px 96px;
+			opacity: 0;
+			transform: translateY(34px) scale(0.985);
+			transition: opacity 420ms ease,
+				transform 560ms cubic-bezier(.2,.78,.24,1);
+		}
+		#objective-shell.ready {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
+		#objective-panel {
+			position: relative;
+			width: 100%;
+			max-width: 1660px;
+			min-height: 560px;
+			overflow: hidden;
+			border: 1px solid rgba(255,255,255,0.14);
+			border-radius: 30px;
+			background: rgba(29,35,48,var(--panel-opacity));
+			box-shadow: 0 30px 110px rgba(0,0,0,0.52);
+		}
+		#objective-panel::before {
+			content: "";
+			position: absolute;
+			inset: 0 auto 0 0;
+			width: 10px;
+			background: var(--accent);
+		}
+		#objective-panel::after {
+			content: "";
+			position: absolute;
+			inset: 0;
+			pointer-events: none;
+			background: linear-gradient(118deg, rgba(255,255,255,0.075), transparent 38%);
+		}
+		.view {
+			position: relative;
+			z-index: 1;
+			transition: opacity 220ms ease, transform 260ms ease;
+		}
+		#objective-panel.transitioning .view {
+			opacity: 0;
+			transform: translateY(10px);
+		}
+		#current-view {
+			display: grid;
+			grid-template-rows: auto minmax(230px,1fr) auto;
+			min-height: 560px;
+			padding: 58px 68px 48px 78px;
+		}
+		#recap-view {
+			display: none;
+			min-height: 760px;
+			max-height: 900px;
+			padding: 48px 58px 46px 68px;
+		}
+		#objective-panel.recap { min-height: 760px; }
+		#objective-panel.long-current:not(.recap) #current-view { min-height: 720px; }
+		#objective-panel.recap #current-view { display: none; }
+		#objective-panel.recap #recap-view { display: block; }
+		.eyebrow-row {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 32px;
+		}
+		.eyebrow {
+			margin: 0;
+			color: var(--accent);
+			font-size: 23px;
+			font-weight: 800;
+			letter-spacing: 0.19em;
+			text-transform: uppercase;
+		}
+		#position {
+			flex: 0 0 auto;
+			color: rgba(255,255,255,0.7);
+			font-size: 23px;
+			font-weight: 700;
+			letter-spacing: 0.04em;
+		}
+		#objective-copy {
+			align-self: center;
+			padding: 40px 0 32px;
+		}
+		#short-label {
+			display: none;
+			margin: 0 0 17px;
+			color: rgba(255,255,255,0.72);
+			font-size: 27px;
+			font-weight: 700;
+			letter-spacing: 0.035em;
+		}
+		#short-label.visible { display: block; }
+		#objective-text {
+			max-width: 1480px;
+			margin: 0;
+			font-size: 64px;
+			font-weight: 760;
+			line-height: 1.13;
+			letter-spacing: -0.025em;
+			overflow-wrap: anywhere;
+		}
+		#objective-text.medium { font-size: 55px; line-height: 1.16; }
+		#objective-text.long { font-size: 46px; line-height: 1.2; }
+		.current-footer {
+			display: grid;
+			grid-template-columns: minmax(0,1fr) auto;
+			align-items: center;
+			gap: 34px;
+		}
+		.progress-track {
+			height: 11px;
+			overflow: hidden;
+			border-radius: 999px;
+			background: rgba(255,255,255,0.14);
+		}
+		#progress-fill {
+			height: 100%;
+			width: 0;
+			border-radius: inherit;
+			background: var(--accent);
+			transition: width 360ms ease;
+		}
+		.completion {
+			display: flex;
+			align-items: center;
+			gap: 13px;
+			min-width: 196px;
+			color: rgba(255,255,255,0.7);
+			font-size: 21px;
+			font-weight: 750;
+			letter-spacing: 0.02em;
+		}
+		.completion-mark,
+		.recap-mark {
+			display: grid;
+			place-items: center;
+			border: 2px solid currentColor;
+			border-radius: 50%;
+		}
+		.completion-mark {
+			width: 42px;
+			height: 42px;
+			font-size: 25px;
+		}
+		.completion.completed { color: var(--complete); }
+		.completion.completed .completion-mark {
+			background: color-mix(in srgb, var(--complete) 18%, transparent);
+			animation: checked 480ms cubic-bezier(.2,.9,.25,1);
+		}
+		.recap-header {
+			display: flex;
+			align-items: end;
+			justify-content: space-between;
+			gap: 30px;
+			margin-bottom: 22px;
+			padding: 0 8px 20px;
+			border-bottom: 1px solid rgba(255,255,255,0.14);
+		}
+		.recap-heading { margin: 0; font-size: 54px; line-height: 1; letter-spacing: -0.025em; }
+		#recap-count { color: rgba(255,255,255,0.7); font-size: 22px; font-weight: 700; }
+		#recap-list {
+			display: grid;
+			gap: 10px;
+			margin: 0;
+			padding: 0;
+			list-style: none;
+		}
+		.recap-item {
+			display: grid;
+			grid-template-columns: 48px minmax(0,1fr);
+			align-items: center;
+			gap: 16px;
+			min-height: 58px;
+			padding: 9px 16px 9px 10px;
+			border: 2px solid transparent;
+			border-radius: 14px;
+			background: rgba(255,255,255,0.045);
+		}
+		.recap-item.active {
+			border-color: var(--accent);
+			background: color-mix(in srgb, var(--accent) 14%, transparent);
+		}
+		.recap-item.completed { color: rgba(255,255,255,0.78); }
+		.recap-mark { width: 36px; height: 36px; color: rgba(255,255,255,0.48); font-size: 21px; }
+		.recap-item.completed .recap-mark {
+			color: var(--complete);
+			background: color-mix(in srgb, var(--complete) 16%, transparent);
+		}
+		.recap-copy { min-width: 0; }
+		.recap-label {
+			display: none;
+			margin-bottom: 2px;
+			color: var(--accent);
+			font-size: 15px;
+			font-weight: 800;
+			letter-spacing: 0.08em;
+			text-transform: uppercase;
+		}
+		.recap-label.visible { display: block; }
+		.recap-text {
+			display: -webkit-box;
+			overflow: hidden;
+			font-size: 27px;
+			font-weight: 680;
+			line-height: 1.15;
+			overflow-wrap: anywhere;
+			-webkit-box-orient: vertical;
+			-webkit-line-clamp: 2;
+		}
+		#recap-list.dense { gap: 7px; }
+		#recap-list.dense .recap-item { min-height: 54px; padding-top: 6px; padding-bottom: 6px; }
+		#recap-list.dense .recap-text { font-size: 23px; }
+		#recap-list.dense .recap-label { font-size: 13px; }
+		#configuration-error {
+			display: none;
+			position: fixed;
+			left: 50%;
+			top: 50%;
+			transform: translate(-50%,-50%);
+			padding: 22px 30px;
+			border-radius: 12px;
+			background: rgba(20,20,20,0.94);
+			color: #fff;
+			font-size: 28px;
+		}
+		@keyframes checked {
+			0% { transform: scale(.72); }
+			58% { transform: scale(1.12); }
+			100% { transform: scale(1); }
+		}
+		@media (prefers-reduced-motion: reduce) {
+			#objective-shell, .view, #progress-fill { transition: none; }
+			.completion.completed .completion-mark { animation: none; }
+		}
+	</style>
+</head>
+<body>
+	<main id="objective-shell" aria-live="polite">
+		<section id="objective-panel" aria-label="Session objective">
+			<div id="current-view" class="view">
+				<header class="eyebrow-row">
+					<p id="eyebrow" class="eyebrow">Session Objective</p>
+					<div id="position">1 of 1</div>
+				</header>
+				<div id="objective-copy">
+					<p id="short-label"></p>
+					<h1 id="objective-text"></h1>
+				</div>
+				<footer class="current-footer">
+					<div class="progress-track" aria-hidden="true"><div id="progress-fill"></div></div>
+					<div id="completion" class="completion">
+						<span id="completion-mark" class="completion-mark"></span>
+						<span id="completion-label">In progress</span>
+					</div>
+				</footer>
+			</div>
+			<div id="recap-view" class="view">
+				<header class="recap-header">
+					<div>
+						<p class="eyebrow">Session Recap</p>
+						<h1 class="recap-heading">Learning at a glance</h1>
+					</div>
+					<div id="recap-count">0 of 0 complete</div>
+				</header>
+				<ol id="recap-list"></ol>
+			</div>
+		</section>
+	</main>
+	<div id="configuration-error">Session objective configuration unavailable</div>
+
+	<script>
+	(function() {
+		'use strict';
+		var PREFIX = '#vsd-session-objective=';
+		var MAX_FRAGMENT = 20000;
+		var TRANSITION_MS = 220;
+		var shell = document.getElementById('objective-shell');
+		var panel = document.getElementById('objective-panel');
+		var state = null;
+		var rows = [];
+		var ws = null;
+		var reconnectTimer = null;
+		var transitionTimer = null;
+		var pendingState = null;
+		var unloading = false;
+		var authenticationBlocked = false;
+
+		function text(value, maximum) {
+			return typeof value === 'string' ? value.trim().slice(0, maximum) : '';
+		}
+
+		function validHex(value, fallback) {
+			return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : fallback;
+		}
+
+		function validMode(value) {
+			return value === 'recap' ? 'recap' : value === 'current' ? 'current' : null;
+		}
+
+		function validateObjective(value) {
+			if (!value || typeof value !== 'object') return null;
+			var objectiveText = text(value.text, 300);
+			if (!objectiveText) return null;
+			return { label: text(value.label, 40), text: objectiveText };
+		}
+
+		function readPayload() {
+			var hash = String(window.location.hash || '');
+			if (hash.length > MAX_FRAGMENT || hash.indexOf(PREFIX) !== 0) {
+				throw new Error('invalid fragment');
+			}
+			var payload = JSON.parse(decodeURIComponent(hash.slice(PREFIX.length)));
+			if (!payload || payload.version !== 1 || typeof payload.sessionId !== 'string' ||
+				!Array.isArray(payload.objectives) || payload.objectives.length < 1 ||
+				payload.objectives.length > 10) throw new Error('invalid payload');
+			var objectives = payload.objectives.map(validateObjective);
+			if (objectives.some(function(objective) { return !objective; })) {
+				throw new Error('invalid objective');
+			}
+			if (!Number.isInteger(payload.currentIndex) || payload.currentIndex < 0 ||
+				payload.currentIndex >= objectives.length || !Array.isArray(payload.completed) ||
+				payload.completed.length !== objectives.length || !validMode(payload.displayMode)) {
+				throw new Error('invalid state');
+			}
+			var sessionId = text(payload.sessionId, 120);
+			if (!sessionId) throw new Error('invalid session');
+			return {
+				sessionId: sessionId,
+				eyebrow: payload.eyebrow === 'LEARNING OUTCOME' ?
+					'LEARNING OUTCOME' : 'SESSION OBJECTIVE',
+				objectives: objectives,
+				currentIndex: payload.currentIndex,
+				completed: objectives.map(function(_, index) {
+					return payload.completed[index] === true;
+				}),
+				displayMode: payload.displayMode,
+				theme: payload.theme || {}
+			};
+		}
+
+		function persistState() {
+			if (!state || typeof localStorage === 'undefined') return;
+			try {
+				localStorage.setItem('vsd-session-objective-state:' + state.sessionId,
+					JSON.stringify({
+						currentIndex: state.currentIndex,
+						completed: state.completed,
+						displayMode: state.displayMode
+					}));
+			} catch (_) {}
+		}
+
+		function restoreState(payload) {
+			if (typeof localStorage === 'undefined') return payload;
+			try {
+				var stored = JSON.parse(localStorage.getItem(
+					'vsd-session-objective-state:' + payload.sessionId) || 'null');
+				if (stored && Number.isInteger(stored.currentIndex) &&
+					stored.currentIndex >= 0 && stored.currentIndex < payload.objectives.length &&
+					Array.isArray(stored.completed) &&
+					stored.completed.length === payload.objectives.length &&
+					validMode(stored.displayMode)) {
+					payload.currentIndex = stored.currentIndex;
+					payload.completed = payload.objectives.map(function(_, index) {
+						return stored.completed[index] === true;
+					});
+					payload.displayMode = stored.displayMode;
+				}
+			} catch (_) {}
+			return payload;
+		}
+
+		function createRows() {
+			var list = document.getElementById('recap-list');
+			state.objectives.forEach(function(objective, index) {
+				var row = document.createElement('li');
+				row.className = 'recap-item';
+				var mark = document.createElement('span');
+				mark.className = 'recap-mark';
+				var copy = document.createElement('div');
+				copy.className = 'recap-copy';
+				var label = document.createElement('div');
+				label.className = 'recap-label';
+				label.textContent = objective.label;
+				label.classList.toggle('visible', !!objective.label);
+				var objectiveText = document.createElement('div');
+				objectiveText.className = 'recap-text';
+				objectiveText.textContent = objective.text;
+				copy.appendChild(label);
+				copy.appendChild(objectiveText);
+				row.appendChild(mark);
+				row.appendChild(copy);
+				list.appendChild(row);
+				rows.push({ row: row, mark: mark });
+			});
+			list.classList.toggle('dense', state.objectives.length >= 7);
+		}
+
+		function applyTheme() {
+			var theme = state.theme || {};
+			document.documentElement.style.setProperty('--panel',
+				validHex(theme.panel, '#1d2330'));
+			document.documentElement.style.setProperty('--text',
+				validHex(theme.text, '#ffffff'));
+			document.documentElement.style.setProperty('--accent',
+				validHex(theme.accent, '#ffd166'));
+			document.documentElement.style.setProperty('--complete',
+				validHex(theme.complete, '#7bd389'));
+			var opacity = Number(theme.panelOpacity);
+			document.documentElement.style.setProperty('--panel-opacity',
+				String(Number.isFinite(opacity) ? Math.max(0.72, Math.min(1, opacity)) : 0.94));
+		}
+
+		function render() {
+			if (!state) return;
+			var current = state.objectives[state.currentIndex];
+			var objectiveText = document.getElementById('objective-text');
+			var shortLabel = document.getElementById('short-label');
+			var completeCount = state.completed.filter(Boolean).length;
+			document.getElementById('eyebrow').textContent = state.eyebrow;
+			document.getElementById('position').textContent =
+				(state.currentIndex + 1) + ' of ' + state.objectives.length;
+			shortLabel.textContent = current.label;
+			shortLabel.classList.toggle('visible', !!current.label);
+			objectiveText.textContent = current.text;
+			objectiveText.classList.toggle('medium',
+				current.text.length > 145 && current.text.length <= 220);
+			objectiveText.classList.toggle('long', current.text.length > 220);
+			panel.classList.toggle('long-current', current.text.length > 220);
+			document.getElementById('progress-fill').style.width =
+				(((state.currentIndex + 1) / state.objectives.length) * 100).toFixed(2) + '%';
+			var completed = state.completed[state.currentIndex] === true;
+			document.getElementById('completion').classList.toggle('completed', completed);
+			document.getElementById('completion-mark').textContent = completed ? '\u2713' : '';
+			document.getElementById('completion-label').textContent =
+				completed ? 'Completed' : 'In progress';
+			document.getElementById('recap-count').textContent =
+				completeCount + ' of ' + state.objectives.length + ' complete';
+			rows.forEach(function(parts, index) {
+				parts.row.classList.toggle('active', index === state.currentIndex);
+				parts.row.classList.toggle('completed', state.completed[index] === true);
+				parts.mark.textContent = state.completed[index] === true ? '\u2713' : '';
+			});
+			panel.classList.toggle('recap', state.displayMode === 'recap');
+			panel.setAttribute('aria-label',
+				state.displayMode === 'recap' ? 'Session recap' : 'Session objective');
+			persistState();
+		}
+
+		function reducedMotionRequested() {
+			return typeof window.matchMedia === 'function' &&
+				window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		}
+
+		function cancelTransition() {
+			if (transitionTimer !== null) {
+				clearTimeout(transitionTimer);
+				transitionTimer = null;
+			}
+			pendingState = null;
+			panel.classList.remove('transitioning');
+		}
+
+		function applyIncoming(incoming) {
+			if (!state || !incoming || incoming.type !== 'session_objective_state' ||
+				incoming.sessionId !== state.sessionId ||
+				!Number.isInteger(incoming.currentIndex) || incoming.currentIndex < 0 ||
+				incoming.currentIndex >= state.objectives.length ||
+				!Array.isArray(incoming.completed) ||
+				incoming.completed.length !== state.objectives.length ||
+				!validMode(incoming.displayMode)) return;
+			var next = {
+				currentIndex: incoming.currentIndex,
+				completed: state.objectives.map(function(_, index) {
+					return incoming.completed[index] === true;
+				}),
+				displayMode: incoming.displayMode
+			};
+			if (reducedMotionRequested()) {
+				cancelTransition();
+				state.currentIndex = next.currentIndex;
+				state.completed = next.completed;
+				state.displayMode = next.displayMode;
+				render();
+				return;
+			}
+			pendingState = next;
+			panel.classList.add('transitioning');
+			if (transitionTimer !== null) return;
+			transitionTimer = setTimeout(function() {
+				transitionTimer = null;
+				if (unloading || !state || !pendingState) return;
+				var accepted = pendingState;
+				pendingState = null;
+				state.currentIndex = accepted.currentIndex;
+				state.completed = accepted.completed;
+				state.displayMode = accepted.displayMode;
+				render();
+				void panel.offsetHeight;
+				panel.classList.remove('transitioning');
+			}, TRANSITION_MS);
+		}
+
+		function failClosed() {
+			cancelTransition();
+			state = null;
+			shell.style.display = 'none';
+			document.getElementById('configuration-error').style.display = 'block';
+		}
+
+		function scheduleReconnect(socket) {
+			if (unloading || authenticationBlocked || ws !== socket || reconnectTimer !== null) return;
+			var timer = setTimeout(function() {
+				if (reconnectTimer !== timer) return;
+				reconnectTimer = null;
+				if (unloading || ws !== socket) return;
+				ws = null;
+				connect();
+			}, 2000);
+			reconnectTimer = timer;
+		}
+
+		function connect() {
+			if (unloading || authenticationBlocked || !state || reconnectTimer !== null) return;
+			if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+			var socket = new WebSocket('ws://127.0.0.1:4455');
+			ws = socket;
+			socket.onmessage = function(event) {
+				if (unloading || authenticationBlocked || ws !== socket) return;
+				var msg;
+				try { msg = JSON.parse(event.data); } catch (_) { return; }
+				if (msg.op === 0) {
+					if (msg.d && Object.prototype.hasOwnProperty.call(msg.d, 'authentication')) {
+						authenticationBlocked = true;
+						try { socket.close(); } catch (_) {}
+						return;
+					}
+					socket.send(JSON.stringify({
+						op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 }
+					}));
+					return;
+				}
+				if (msg.op !== 5 || !msg.d ||
+					msg.d.eventType !== 'CustomEvent') return;
+				applyIncoming(msg.d.eventData);
+			};
+			socket.onerror = function() {
+				if (unloading || ws !== socket) return;
+				try { socket.close(); } catch (_) {}
+				scheduleReconnect(socket);
+			};
+			socket.onclose = function() {
+				if (unloading || ws !== socket) return;
+				scheduleReconnect(socket);
+			};
+		}
+
+		function stop() {
+			if (unloading) return;
+			unloading = true;
+			cancelTransition();
+			if (reconnectTimer !== null) {
+				clearTimeout(reconnectTimer);
+				reconnectTimer = null;
+			}
+			var socket = ws;
+			ws = null;
+			if (socket) {
+				socket.onmessage = null;
+				socket.onerror = null;
+				socket.onclose = null;
+				try { socket.close(); } catch (_) {}
+			}
+		}
+
+		try {
+			state = restoreState(readPayload());
+			applyTheme();
+			createRows();
+			render();
+			requestAnimationFrame(function() {
+				if (!unloading && state) shell.classList.add('ready');
+			});
+			connect();
+		} catch (_) {
+			failClosed();
+		}
+		window.addEventListener('beforeunload', stop);
+	})();
+	</script>
+</body>
+</html>
