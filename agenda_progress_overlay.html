@@ -31,14 +31,12 @@
 		#agenda-panel.left { left: 80px; }
 		#agenda-panel.right { right: 80px; transform: translateX(80px); }
 		#agenda-panel.ready { opacity: 1; transform: translateX(0); }
-		.header-row { display: flex; align-items: flex-end; justify-content: space-between; gap: 24px; }
+		.header-row { display: block; }
 		.eyebrow { margin: 0 0 8px; font-size: 18px; font-weight: 800; letter-spacing: 0.18em;
 			text-transform: uppercase; opacity: 0.68; }
 		#agenda-title { margin: 0; font-size: 48px; line-height: 1.05; font-weight: 800;
-			overflow-wrap: anywhere; }
-		#progress-label { flex: 0 0 auto; padding-bottom: 5px; font-size: 19px; font-weight: 700;
-			white-space: nowrap; opacity: 0.76; }
-		.progress-track { height: 8px; margin: 24px 0 26px; overflow: hidden;
+			overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+		.progress-track { height: 8px; margin: 18px 0 20px; overflow: hidden;
 			border-radius: 999px; background: rgba(255,255,255,0.14); }
 		#progress-fill { width: 0; height: 100%; border-radius: inherit;
 			transition: width 0.35s ease; }
@@ -81,7 +79,6 @@
 				<p class="eyebrow">Session progress</p>
 				<h1 id="agenda-title">Agenda</h1>
 			</div>
-			<div id="progress-label"></div>
 		</div>
 		<div class="progress-track"><div id="progress-fill"></div></div>
 		<ol id="agenda-list"></ol>
@@ -95,7 +92,6 @@
 	const PREFIX = '#vsd-agenda=';
 	const panel = document.getElementById('agenda-panel');
 	const titleElement = document.getElementById('agenda-title');
-	const labelElement = document.getElementById('progress-label');
 	const fillElement = document.getElementById('progress-fill');
 	const listElement = document.getElementById('agenda-list');
 	const errorElement = document.getElementById('configuration-error');
@@ -199,9 +195,6 @@
 				}));
 			}
 		} catch (_) {}
-		const completedCount = state.completed.filter(Boolean).length;
-		labelElement.textContent = 'Step ' + (state.currentIndex + 1) + ' of ' + state.items.length +
-			' · ' + completedCount + ' complete';
 		fillElement.style.width = (((state.currentIndex + 1) / state.items.length) * 100).toFixed(2) + '%';
 
 		rows.forEach(function(parts, index) {
