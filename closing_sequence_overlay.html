@@ -19,6 +19,8 @@
 		body { padding:54px 86px; }
 		#stage { position:relative; width:100%; height:100%; display:flex; align-items:center; justify-content:center; }
 		#card { position:relative; width:min(1540px,100%); min-height:760px; max-height:920px; padding:72px 86px 64px; border:3px solid var(--accent); border-radius:42px; background:var(--panel); box-shadow:0 32px 90px rgba(0,0,0,.45); display:flex; flex-direction:column; justify-content:center; }
+		#page-content { width:100%; }
+		#page-content.page-fade-out { opacity:0; transform:translateY(10px); }
 		#eyebrow { margin:0 0 18px; color:var(--accent); font-size:26px; font-weight:800; letter-spacing:.14em; text-transform:uppercase; }
 		#heading { margin:0 0 28px; max-width:1220px; font-size:72px; line-height:1.06; letter-spacing:-.025em; overflow-wrap:anywhere; }
 		#content { display:grid; grid-template-columns:minmax(0,1fr); gap:22px; font-size:36px; line-height:1.36; }
@@ -49,6 +51,7 @@
 		#invalid { display:none; font-size:32px; color:#fff; background:#7b1e28; border-radius:18px; padding:24px 30px; }
 		@media (prefers-reduced-motion:no-preference) {
 			#card { animation:arrive .42s ease-out both; }
+			#page-content.crossfade-enabled { transition:opacity .16s ease, transform .16s ease; }
 			@keyframes arrive { from { opacity:0; transform:translateY(24px) scale(.985); } to { opacity:1; transform:none; } }
 		}
 	</style>
@@ -56,17 +59,19 @@
 <body>
 	<main id="stage" aria-live="polite">
 		<section id="card" aria-labelledby="heading">
-			<div id="eyebrow"></div>
-			<h1 id="heading"></h1>
-			<div id="content">
-				<div id="primary"></div>
-				<aside id="aside">
-					<img id="logo" alt="">
-					<div id="qr" aria-label="QR code"></div>
-					<div id="visible-url"></div>
-				</aside>
+			<div id="page-content">
+				<div id="eyebrow"></div>
+				<h1 id="heading"></h1>
+				<div id="content">
+					<div id="primary"></div>
+					<aside id="aside">
+						<img id="logo" alt="">
+						<div id="qr" aria-label="QR code"></div>
+						<div id="visible-url"></div>
+					</aside>
+				</div>
+				<div id="counter" aria-label="Page number"></div>
 			</div>
-			<div id="counter" aria-label="Page number"></div>
 		</section>
 		<div id="invalid">Closing sequence data is unavailable.</div>
 	</main>
@@ -77,7 +82,16 @@
 		'use strict';
 		var PREFIX = '#vsd-closing=';
 		var MAX_FRAGMENT = 12000;
+		var PAGE_FADE_MS = 160;
 		var unloading = false;
+		var state = null;
+		var renderedPageIndex = -1;
+		var pendingPageIndex = null;
+		var transitionTimer = null;
+		var ws = null;
+		var reconnectTimer = null;
+		var authenticationBlocked = false;
+		var pageContent = document.getElementById('page-content');
 
 		function text(value, maximum) {
 			return typeof value === 'string' ? value.trim().slice(0, maximum) : '';
@@ -204,6 +218,9 @@
 		}
 
 		function failClosed() {
+			cancelPageTransition();
+			state = null;
+			renderedPageIndex = -1;
 			document.getElementById('card').style.display = 'none';
 			document.getElementById('invalid').style.display = 'block';
 		}
@@ -214,51 +231,184 @@
 			var payload = JSON.parse(decodeURIComponent(hash.slice(PREFIX.length)));
 			if (!payload || payload.version !== 1 || !Array.isArray(payload.pages) ||
 				payload.pages.length < 1 || payload.pages.length > 12) throw new Error('invalid payload');
-			return payload;
+			return {
+				sessionId: text(payload.sessionId, 120),
+				pageIndex: Number.isInteger(payload.pageIndex) ? payload.pageIndex : 0,
+				pages: payload.pages,
+				pageCrossfade: payload.pageCrossfade !== false,
+				theme: payload.theme || {}
+			};
 		}
 
-		function render() {
+		function persistPageIndex() {
+			if (!state || !state.sessionId || typeof localStorage === 'undefined') return;
+			try {
+				localStorage.setItem('vsd-closing-page:' + state.sessionId, String(state.pageIndex));
+			} catch (_) {}
+		}
+
+		function restorePageIndex(payload) {
+			if (!payload.sessionId || typeof localStorage === 'undefined') return payload.pageIndex;
+			try {
+				var stored = Number(localStorage.getItem('vsd-closing-page:' + payload.sessionId));
+				if (Number.isInteger(stored) && stored >= 0 && stored < payload.pages.length) return stored;
+			} catch (_) {}
+			return payload.pageIndex;
+		}
+
+		function cancelPageTransition() {
+			if (transitionTimer !== null) {
+				clearTimeout(transitionTimer);
+				transitionTimer = null;
+			}
+			pendingPageIndex = null;
+			if (pageContent) pageContent.classList.remove('page-fade-out');
+		}
+
+		function renderPage(index) {
+			if (!state || index < 0 || index >= state.pages.length) throw new Error('invalid page');
+			var page = state.pages[index];
+			var allowed = ['summary','resources','credits','next','thanks'];
+			if (!page || allowed.indexOf(page.type) === -1) throw new Error('invalid type');
+
+			document.getElementById('card').style.display = 'flex';
+			document.getElementById('invalid').style.display = 'none';
+			document.getElementById('eyebrow').textContent = text(page.eyebrow, 50) || 'Closing Sequence';
+			document.getElementById('heading').textContent = text(page.heading, 80);
+			document.getElementById('counter').textContent = (index + 1) + ' / ' + state.pages.length;
+			var primary = document.getElementById('primary');
+			primary.innerHTML = '';
+
+			if (page.type === 'summary') renderSummary(page, primary);
+			else if (page.type === 'resources') renderResources(page, primary);
+			else if (page.type === 'credits') renderCredits(page, primary);
+			else if (page.type === 'next') renderNext(page, primary);
+			else renderThanks(page, primary);
+			renderedPageIndex = index;
+		}
+
+		function reducedMotionRequested() {
+			return typeof window.matchMedia === 'function' &&
+				window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		}
+
+		function navigateTo(index) {
+			if (!state || !Number.isInteger(index) || index < 0 || index >= state.pages.length) return;
+			if (index === state.pageIndex && transitionTimer === null && renderedPageIndex === index) return;
+			state.pageIndex = index;
+			persistPageIndex();
+			if (!state.pageCrossfade || reducedMotionRequested()) {
+				cancelPageTransition();
+				renderPage(index);
+				return;
+			}
+			pendingPageIndex = index;
+			pageContent.classList.add('page-fade-out');
+			if (transitionTimer !== null) return;
+			transitionTimer = setTimeout(function() {
+				transitionTimer = null;
+				if (unloading || !state || pendingPageIndex === null) return;
+				var nextIndex = pendingPageIndex;
+				pendingPageIndex = null;
+				renderPage(nextIndex);
+				void pageContent.offsetHeight;
+				pageContent.classList.remove('page-fade-out');
+			}, PAGE_FADE_MS);
+		}
+
+		function loadPayload() {
 			if (unloading) return;
 			try {
-				var payload = readPayload();
-				var index = Number.isInteger(payload.pageIndex) ? payload.pageIndex : 0;
-				if (index < 0 || index >= payload.pages.length) throw new Error('invalid page');
-				var page = payload.pages[index];
-				var allowed = ['summary','resources','credits','next','thanks'];
-				if (!page || allowed.indexOf(page.type) === -1) throw new Error('invalid type');
-
-				document.getElementById('card').style.display = 'flex';
-				document.getElementById('invalid').style.display = 'none';
-				var theme = payload.theme || {};
+				cancelPageTransition();
+				state = readPayload();
+				if (state.pageIndex < 0 || state.pageIndex >= state.pages.length) throw new Error('invalid page');
+				state.pageIndex = restorePageIndex(state);
+				var theme = state.theme;
 				[['--bg',theme.background],['--panel',theme.panel],['--text',theme.text],['--accent',theme.accent]]
 					.forEach(function(pair) {
 						if (/^#[0-9a-f]{6}$/i.test(pair[1] || '')) document.documentElement.style.setProperty(pair[0], pair[1]);
 					});
-
-				document.getElementById('eyebrow').textContent = text(page.eyebrow, 50) || 'Closing Sequence';
-				document.getElementById('heading').textContent = text(page.heading, 80);
-				document.getElementById('counter').textContent = (index + 1) + ' / ' + payload.pages.length;
-				var primary = document.getElementById('primary');
-				primary.innerHTML = '';
-
-				if (page.type === 'summary') renderSummary(page, primary);
-				else if (page.type === 'resources') renderResources(page, primary);
-				else if (page.type === 'credits') renderCredits(page, primary);
-				else if (page.type === 'next') renderNext(page, primary);
-				else renderThanks(page, primary);
+				pageContent.classList.toggle('crossfade-enabled', state.pageCrossfade);
+				renderPage(state.pageIndex);
+				persistPageIndex();
+				if (state.sessionId) connect();
 			} catch (error) {
 				failClosed();
 			}
 		}
 
-		function stop() {
-			unloading = true;
-			window.removeEventListener('hashchange', render);
+		function scheduleReconnect(socket) {
+			if (unloading || authenticationBlocked || ws !== socket || reconnectTimer !== null) return;
+			var timer = setTimeout(function() {
+				if (reconnectTimer !== timer) return;
+				reconnectTimer = null;
+				if (unloading || ws !== socket) return;
+				ws = null;
+				connect();
+			}, 2000);
+			reconnectTimer = timer;
 		}
 
-		window.addEventListener('hashchange', render);
+		function connect() {
+			if (unloading || authenticationBlocked || !state || !state.sessionId ||
+				reconnectTimer !== null) return;
+			if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+			var socket = new WebSocket('ws://127.0.0.1:4455');
+			ws = socket;
+
+			socket.onmessage = function(event) {
+				if (unloading || authenticationBlocked || ws !== socket) return;
+				var msg;
+				try { msg = JSON.parse(event.data); } catch (_) { return; }
+				if (msg.op === 0) {
+					if (msg.d && Object.prototype.hasOwnProperty.call(msg.d, 'authentication')) {
+						authenticationBlocked = true;
+						try { socket.close(); } catch (_) {}
+						return;
+					}
+					socket.send(JSON.stringify({ op:1, d:{ rpcVersion:1, eventSubscriptions:1 } }));
+					return;
+				}
+				if (msg.op !== 5 || !msg.d || msg.d.eventType !== 'CustomEvent') return;
+				var data = msg.d.eventData;
+				if (!data || data.type !== 'closing_sequence_state' || !state ||
+					data.sessionId !== state.sessionId || !Number.isInteger(data.pageIndex) ||
+					data.pageIndex < 0 || data.pageIndex >= state.pages.length) return;
+				navigateTo(data.pageIndex);
+			};
+			socket.onerror = function() {
+				if (unloading || ws !== socket) return;
+				try { socket.close(); } catch (_) {}
+				scheduleReconnect(socket);
+			};
+			socket.onclose = function() {
+				if (unloading || ws !== socket) return;
+				scheduleReconnect(socket);
+			};
+		}
+
+		function stop() {
+			if (unloading) return;
+			unloading = true;
+			cancelPageTransition();
+			if (reconnectTimer !== null) {
+				clearTimeout(reconnectTimer);
+				reconnectTimer = null;
+			}
+			var socket = ws;
+			ws = null;
+			if (socket) {
+				socket.onmessage = null;
+				socket.onerror = null;
+				socket.onclose = null;
+				try { socket.close(); } catch (_) {}
+			}
+			window.removeEventListener('hashchange', loadPayload);
+		}
+
+		window.addEventListener('hashchange', loadPayload);
 		window.addEventListener('beforeunload', stop);
-		render();
+		loadPayload();
 	})();
 	</script>
 </body>
