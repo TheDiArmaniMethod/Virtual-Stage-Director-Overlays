@@ -324,6 +324,10 @@
 		var MAX_AVATAR = 500;
 		var MAX_QUESTION = 600;
 		var MAX_CATEGORY = 50;
+		var PROTOCOL_VERSION = 1;
+		var MAX_SESSION_ID = 120;
+		var MAX_OPERATION_ID = 64;
+		var MAX_REVISION = 10000;
 		var TRANSITION_MS = 210;
 		var shell = document.getElementById('question-shell');
 		var panel = document.getElementById('question-panel');
@@ -334,12 +338,17 @@
 		var reconnectTimer = null;
 		var transitionTimer = null;
 		var pendingState = null;
+		var identifiedSocket = null;
+		var requestSequence = 1;
+		var appliedOperations = Object.create(null);
+		var revisionOperations = Object.create(null);
 		var unloading = false;
 		var authenticationBlocked = false;
 
 		function hasOnlyKeys(value, allowed) {
 			if (!value || Object.prototype.toString.call(value) !== '[object Object]') return false;
-			return Object.keys(value).every(function(key) {
+			var keys = Object.keys(value);
+			return keys.length === allowed.length && keys.every(function(key) {
 				return allowed.indexOf(key) !== -1;
 			});
 		}
@@ -399,7 +408,7 @@
 				payload.questions.length < 1 || payload.questions.length > 10) {
 				throw new Error('invalid payload');
 			}
-			var sessionId = strictText(payload.sessionId, 120, true);
+			var sessionId = strictText(payload.sessionId, MAX_SESSION_ID, true);
 			if (sessionId === null || !/^[A-Za-z0-9._:-]+$/.test(sessionId)) {
 				throw new Error('invalid session');
 			}
@@ -415,7 +424,7 @@
 					return typeof value !== 'boolean';
 				}) ||
 				!Number.isSafeInteger(payload.revision) ||
-				payload.revision < 0 || payload.revision > 1000000 ||
+				payload.revision < 0 || payload.revision > MAX_REVISION ||
 				!hasOnlyKeys(payload.theme,
 					['panel','text','accent','answered','panelOpacity']) ||
 				!validHex(payload.theme.panel) || !validHex(payload.theme.text) ||
@@ -522,57 +531,174 @@
 			panel.classList.remove('transitioning');
 		}
 
+		function validIdentifier(value, maximum) {
+			return typeof value === 'string' && value.length >= 1 &&
+				value.length <= maximum && /^[A-Za-z0-9._:-]+$/.test(value);
+		}
+
+		function vectorsEqual(left, right) {
+			return Array.isArray(left) && Array.isArray(right) &&
+				left.length === right.length && left.every(function(value, index) {
+					return value === right[index];
+				});
+		}
+
+		function sendCustomEvent(eventData) {
+			var socket = identifiedSocket;
+			if (unloading || !socket || ws !== socket || socket.readyState !== 1) return false;
+			socket.send(JSON.stringify({
+				op: 6,
+				d: {
+					requestType: 'BroadcastCustomEvent',
+					requestId: 'pq-' + (requestSequence++).toString(36),
+					requestData: { eventData: eventData }
+				}
+			}));
+			return true;
+		}
+
+		function commandSignature(incoming) {
+			return JSON.stringify({
+				protocolVersion: incoming.protocolVersion,
+				sessionId: incoming.sessionId,
+				operationId: incoming.operationId,
+				revision: incoming.revision,
+				command: incoming.command,
+				expectedIndex: incoming.expectedIndex,
+				expectedAnswered: incoming.expectedAnswered
+			});
+		}
+
 		function validateIncoming(incoming) {
 			if (!hasOnlyKeys(incoming, [
-				'type','sessionId','currentIndex','answered','revision'
-			]) || incoming.type !== 'participant_question_state' ||
+				'type','protocolVersion','sessionId','operationId','revision',
+				'command','expectedIndex','expectedAnswered'
+			]) || incoming.type !== 'participant_question_command' ||
+				incoming.protocolVersion !== PROTOCOL_VERSION ||
 				incoming.sessionId !== state.sessionId ||
-				!Number.isInteger(incoming.currentIndex) ||
-				incoming.currentIndex < 0 ||
-				incoming.currentIndex >= state.questions.length ||
-				!Array.isArray(incoming.answered) ||
-				incoming.answered.length !== state.questions.length ||
-				incoming.answered.some(function(value) {
-					return typeof value !== 'boolean';
-				}) ||
+				!validIdentifier(incoming.sessionId, MAX_SESSION_ID) ||
+				!validIdentifier(incoming.operationId, MAX_OPERATION_ID) ||
 				!Number.isSafeInteger(incoming.revision) ||
-				incoming.revision <= state.revision ||
-				incoming.revision > 1000000) return null;
+				incoming.revision < 1 || incoming.revision > MAX_REVISION ||
+				['next','previous','toggle_answered'].indexOf(incoming.command) === -1 ||
+				!Number.isSafeInteger(incoming.expectedIndex) ||
+				incoming.expectedIndex < 0 ||
+				incoming.expectedIndex >= state.questions.length ||
+				!Array.isArray(incoming.expectedAnswered) ||
+				incoming.expectedAnswered.length !== state.questions.length ||
+				incoming.expectedAnswered.some(function(value) {
+					return typeof value !== 'boolean';
+				})) return null;
+
+			var signature = commandSignature(incoming);
+			var applied = appliedOperations[incoming.operationId];
+			if (applied) {
+				if (applied.signature === signature) sendCustomEvent(applied.acknowledgement);
+				return null;
+			}
+			if (pendingState) {
+				if (pendingState.operationId === incoming.operationId &&
+					pendingState.signature === signature) return null;
+				return null;
+			}
+			if (revisionOperations[incoming.revision] !== undefined) return null;
+			if (incoming.revision !== state.revision + 1) return null;
+
+			var expectedAnswered = incoming.expectedAnswered;
+			if (incoming.command === 'next') {
+				if (state.currentIndex >= state.questions.length - 1 ||
+					incoming.expectedIndex !== state.currentIndex + 1 ||
+					!vectorsEqual(expectedAnswered, state.answered)) return null;
+			} else if (incoming.command === 'previous') {
+				if (state.currentIndex <= 0 ||
+					incoming.expectedIndex !== state.currentIndex - 1 ||
+					!vectorsEqual(expectedAnswered, state.answered)) return null;
+			} else {
+				if (incoming.expectedIndex !== state.currentIndex) return null;
+				for (var index = 0; index < state.answered.length; index++) {
+					var expectedValue = index === state.currentIndex ?
+						state.answered[index] !== true : state.answered[index];
+					if (expectedAnswered[index] !== expectedValue) return null;
+				}
+			}
 			return {
-				currentIndex: incoming.currentIndex,
-				answered: incoming.answered.slice(),
+				operationId: incoming.operationId,
+				signature: signature,
+				command: incoming.command,
+				currentIndex: incoming.expectedIndex,
+				answered: incoming.expectedAnswered.slice(),
 				revision: incoming.revision
 			};
+		}
+
+		function acknowledgeApplied(next) {
+			var acknowledgement = {
+				type: 'participant_question_application_ack',
+				protocolVersion: PROTOCOL_VERSION,
+				sessionId: state.sessionId,
+				operationId: next.operationId,
+				appliedRevision: state.revision,
+				appliedCommand: next.command,
+				resultingIndex: state.currentIndex,
+				resultingAnswered: state.answered.slice()
+			};
+			appliedOperations[next.operationId] = {
+				signature: next.signature,
+				acknowledgement: acknowledgement
+			};
+			revisionOperations[next.revision] = next.operationId;
+			sendCustomEvent(acknowledgement);
+		}
+
+		function completeIncoming(next) {
+			if (unloading || !state || pendingState !== next) return;
+			pendingState = null;
+			state.currentIndex = next.currentIndex;
+			state.answered = next.answered.slice();
+			state.revision = next.revision;
+			render();
+			void panel.offsetHeight;
+			panel.classList.remove('transitioning');
+			acknowledgeApplied(next);
 		}
 
 		function applyIncoming(incoming) {
 			if (!state || !incoming) return;
 			var next = validateIncoming(incoming);
 			if (!next) return;
-			if (pendingState && next.revision <= pendingState.revision) return;
+			pendingState = next;
 			if (reducedMotionRequested()) {
-				cancelTransition();
-				state.currentIndex = next.currentIndex;
-				state.answered = next.answered;
-				state.revision = next.revision;
-				render();
+				if (transitionTimer !== null) {
+					clearTimeout(transitionTimer);
+					transitionTimer = null;
+				}
+				completeIncoming(next);
 				return;
 			}
-			pendingState = next;
 			panel.classList.add('transitioning');
-			if (transitionTimer !== null) return;
 			transitionTimer = setTimeout(function() {
 				transitionTimer = null;
-				if (unloading || !state || !pendingState) return;
-				var accepted = pendingState;
-				pendingState = null;
-				state.currentIndex = accepted.currentIndex;
-				state.answered = accepted.answered;
-				state.revision = accepted.revision;
-				render();
-				void panel.offsetHeight;
-				panel.classList.remove('transitioning');
+				completeIncoming(next);
 			}, TRANSITION_MS);
+		}
+
+		function handleStateProbe(incoming) {
+			if (!state || !hasOnlyKeys(incoming, [
+				'type','protocolVersion','sessionId','probeId'
+			]) || incoming.type !== 'participant_question_state_probe' ||
+				incoming.protocolVersion !== PROTOCOL_VERSION ||
+				incoming.sessionId !== state.sessionId ||
+				!validIdentifier(incoming.sessionId, MAX_SESSION_ID) ||
+				!validIdentifier(incoming.probeId, MAX_OPERATION_ID)) return;
+			sendCustomEvent({
+				type: 'participant_question_state_report',
+				protocolVersion: PROTOCOL_VERSION,
+				sessionId: state.sessionId,
+				probeId: incoming.probeId,
+				revision: state.revision,
+				currentIndex: state.currentIndex,
+				answered: state.answered.slice()
+			});
 		}
 
 		function failClosed() {
@@ -616,9 +742,20 @@
 					}));
 					return;
 				}
+				if (msg.op === 2) {
+					if (msg.d && msg.d.negotiatedRpcVersion === 1) {
+						identifiedSocket = socket;
+					}
+					return;
+				}
 				if (msg.op !== 5 || !msg.d ||
 					msg.d.eventType !== 'CustomEvent') return;
-				applyIncoming(msg.d.eventData);
+				if (msg.d.eventData &&
+					msg.d.eventData.type === 'participant_question_state_probe') {
+					handleStateProbe(msg.d.eventData);
+				} else {
+					applyIncoming(msg.d.eventData);
+				}
 			};
 			socket.onerror = function() {
 				if (unloading || ws !== socket) return;
@@ -642,6 +779,7 @@
 			}
 			var socket = ws;
 			ws = null;
+			identifiedSocket = null;
 			if (socket) {
 				socket.onmessage = null;
 				socket.onerror = null;
