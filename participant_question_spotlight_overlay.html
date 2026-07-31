@@ -1,0 +1,668 @@
+<!DOCTYPE html>
+<!--
+	Virtual Stage Director v1.6.10.49
+	Participant Question Spotlight
+
+	Prepared participant data is carried only in #vsd-participant-question.
+	Navigation and answered-state changes use revisioned, session-scoped OBS
+	BroadcastCustomEvent messages.
+-->
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<meta name="viewport" content="width=1920,height=1080">
+	<title>Participant Question Spotlight</title>
+	<style>
+		:root {
+			--panel: #172033;
+			--text: #ffffff;
+			--accent: #d8ad5c;
+			--answered: #72c69c;
+			--panel-opacity: 0.94;
+		}
+		* { box-sizing: border-box; }
+		html, body {
+			width: 1920px;
+			height: 1080px;
+			margin: 0;
+			overflow: hidden;
+			background: transparent;
+			color: var(--text);
+			font-family: Arial, Helvetica, sans-serif;
+		}
+		#question-shell {
+			position: fixed;
+			inset: 0;
+			display: grid;
+			place-items: center;
+			padding: 74px 104px;
+			opacity: 0;
+			transform: translateY(28px) scale(.988);
+			transition: opacity 420ms ease,
+				transform 560ms cubic-bezier(.2,.78,.24,1);
+		}
+		#question-shell.ready {
+			opacity: 1;
+			transform: translateY(0) scale(1);
+		}
+		#question-shell.exiting {
+			opacity: 0;
+			transform: translateY(18px) scale(.992);
+			transition-duration: 220ms;
+		}
+		#question-panel {
+			position: relative;
+			width: 100%;
+			max-width: 1640px;
+			min-height: 690px;
+			overflow: hidden;
+			border: 1px solid rgba(255,255,255,.16);
+			border-radius: 28px;
+			background: rgba(23,32,51,var(--panel-opacity));
+			box-shadow: 0 34px 118px rgba(0,0,0,.54);
+		}
+		#question-panel::before {
+			content: "";
+			position: absolute;
+			inset: 0 0 auto;
+			height: 8px;
+			background: var(--accent);
+			transition: background-color 320ms ease;
+		}
+		#question-panel::after {
+			content: "Q";
+			position: absolute;
+			right: 42px;
+			bottom: -92px;
+			color: rgba(255,255,255,.035);
+			font-family: Georgia, "Times New Roman", serif;
+			font-size: 420px;
+			font-weight: 700;
+			line-height: 1;
+			pointer-events: none;
+		}
+		#question-panel.answered::before { background: var(--answered); }
+		#question-content {
+			position: relative;
+			z-index: 1;
+			display: grid;
+			grid-template-rows: auto minmax(330px,1fr) auto;
+			min-height: 690px;
+			padding: 48px 62px 52px;
+			transition: opacity 210ms ease, transform 250ms ease;
+		}
+		#question-panel.transitioning #question-content {
+			opacity: 0;
+			transform: translateY(10px);
+		}
+		.topline {
+			display: flex;
+			align-items: center;
+			justify-content: space-between;
+			gap: 28px;
+		}
+		.live-label {
+			display: flex;
+			align-items: center;
+			gap: 15px;
+			margin: 0;
+			color: var(--accent);
+			font-size: 23px;
+			font-weight: 800;
+			letter-spacing: .17em;
+			text-transform: uppercase;
+		}
+		.live-label::before {
+			content: "";
+			width: 34px;
+			height: 2px;
+			background: currentColor;
+		}
+		#category {
+			display: none;
+			max-width: 610px;
+			overflow: hidden;
+			color: rgba(255,255,255,.72);
+			font-size: 21px;
+			font-weight: 720;
+			letter-spacing: .05em;
+			text-overflow: ellipsis;
+			text-transform: uppercase;
+			white-space: nowrap;
+		}
+		#category.visible { display: block; }
+		.question-block {
+			align-self: center;
+			padding: 38px 24px 34px;
+		}
+		#question-text {
+			max-width: 1480px;
+			margin: 0;
+			font-family: Georgia, "Times New Roman", serif;
+			font-size: 67px;
+			font-weight: 600;
+			line-height: 1.15;
+			letter-spacing: -.018em;
+			overflow-wrap: anywhere;
+			white-space: pre-wrap;
+		}
+		#question-text.medium { font-size: 57px; line-height: 1.18; }
+		#question-text.long { font-size: 45px; line-height: 1.22; }
+		#question-text.very-long { font-size: 37px; line-height: 1.24; }
+		.attribution-row {
+			display: grid;
+			grid-template-columns: minmax(0,1fr) auto;
+			align-items: center;
+			gap: 42px;
+			padding-top: 28px;
+			border-top: 1px solid rgba(255,255,255,.14);
+		}
+		.participant {
+			display: grid;
+			grid-template-columns: 94px minmax(0,1fr);
+			align-items: center;
+			gap: 22px;
+			min-width: 0;
+		}
+		.avatar-frame {
+			position: relative;
+			width: 94px;
+			height: 94px;
+			overflow: hidden;
+			border: 2px solid color-mix(in srgb, var(--accent) 70%, white);
+			border-radius: 50%;
+			background: rgba(255,255,255,.08);
+		}
+		#avatar {
+			position: absolute;
+			inset: 0;
+			width: 100%;
+			height: 100%;
+			object-fit: contain;
+			object-position: center;
+		}
+		#avatar-fallback {
+			position: absolute;
+			inset: 0;
+			display: grid;
+			place-items: center;
+			color: var(--text);
+			font-size: 31px;
+			font-weight: 800;
+			letter-spacing: .03em;
+		}
+		.participant-copy { min-width: 0; }
+		.asked-by {
+			margin: 0 0 5px;
+			color: rgba(255,255,255,.58);
+			font-size: 17px;
+			font-weight: 750;
+			letter-spacing: .12em;
+			text-transform: uppercase;
+		}
+		#participant-name {
+			margin: 0;
+			overflow: hidden;
+			font-size: 35px;
+			font-weight: 780;
+			line-height: 1.12;
+			overflow-wrap: anywhere;
+		}
+		#participant-name.long { font-size: 29px; }
+		.queue-state {
+			display: grid;
+			grid-template-columns: auto auto;
+			align-items: center;
+			gap: 22px;
+		}
+		#position {
+			color: rgba(255,255,255,.68);
+			font-size: 21px;
+			font-weight: 720;
+			letter-spacing: .035em;
+			white-space: nowrap;
+		}
+		#status {
+			display: flex;
+			align-items: center;
+			gap: 10px;
+			min-width: 176px;
+			padding: 11px 17px;
+			border: 1px solid rgba(255,255,255,.2);
+			border-radius: 999px;
+			color: rgba(255,255,255,.76);
+			font-size: 18px;
+			font-weight: 780;
+			letter-spacing: .035em;
+			transition: color 300ms ease, border-color 300ms ease,
+				background-color 300ms ease;
+		}
+		#status-mark {
+			display: grid;
+			place-items: center;
+			width: 28px;
+			height: 28px;
+			border: 2px solid currentColor;
+			border-radius: 50%;
+			font-size: 18px;
+		}
+		#question-panel.answered #status {
+			border-color: color-mix(in srgb, var(--answered) 64%, transparent);
+			background: color-mix(in srgb, var(--answered) 14%, transparent);
+			color: var(--answered);
+		}
+		#question-panel.answered #status-mark {
+			animation: answered-mark 460ms cubic-bezier(.2,.88,.25,1);
+		}
+		#configuration-error {
+			display: none;
+			position: fixed;
+			left: 50%;
+			top: 50%;
+			transform: translate(-50%,-50%);
+			padding: 22px 30px;
+			border-radius: 12px;
+			background: rgba(20,20,20,.94);
+			color: #fff;
+			font-size: 28px;
+		}
+		@keyframes answered-mark {
+			0% { transform: scale(.74); }
+			58% { transform: scale(1.12); }
+			100% { transform: scale(1); }
+		}
+		@media (prefers-reduced-motion: reduce) {
+			#question-shell,
+			#question-content,
+			#question-panel::before,
+			#status { transition: none; }
+			#question-panel.answered #status-mark { animation: none; }
+		}
+	</style>
+</head>
+<body>
+	<main id="question-shell" aria-live="polite">
+		<section id="question-panel" aria-label="Participant question">
+			<div id="question-content">
+				<header class="topline">
+					<p class="live-label">Live Q&amp;A</p>
+					<div id="category"></div>
+				</header>
+				<div class="question-block">
+					<h1 id="question-text"></h1>
+				</div>
+				<footer class="attribution-row">
+					<div class="participant">
+						<div class="avatar-frame">
+							<div id="avatar-fallback" role="img"></div>
+							<img id="avatar" alt="" referrerpolicy="no-referrer">
+						</div>
+						<div class="participant-copy">
+							<p class="asked-by">Question from</p>
+							<p id="participant-name"></p>
+						</div>
+					</div>
+					<div class="queue-state">
+						<div id="position"></div>
+						<div id="status">
+							<span id="status-mark"></span>
+							<span id="status-label"></span>
+						</div>
+					</div>
+				</footer>
+			</div>
+		</section>
+	</main>
+	<div id="configuration-error">Participant question configuration unavailable</div>
+
+	<script>
+	(function() {
+		'use strict';
+		var PREFIX = '#vsd-participant-question=';
+		var MAX_FRAGMENT = 30000;
+		var MAX_NAME = 80;
+		var MAX_AVATAR = 500;
+		var MAX_QUESTION = 600;
+		var MAX_CATEGORY = 50;
+		var TRANSITION_MS = 210;
+		var shell = document.getElementById('question-shell');
+		var panel = document.getElementById('question-panel');
+		var avatar = document.getElementById('avatar');
+		var fallback = document.getElementById('avatar-fallback');
+		var state = null;
+		var ws = null;
+		var reconnectTimer = null;
+		var transitionTimer = null;
+		var pendingState = null;
+		var unloading = false;
+		var authenticationBlocked = false;
+
+		function hasOnlyKeys(value, allowed) {
+			if (!value || Object.prototype.toString.call(value) !== '[object Object]') return false;
+			return Object.keys(value).every(function(key) {
+				return allowed.indexOf(key) !== -1;
+			});
+		}
+
+		function strictText(value, maximum, required) {
+			if (typeof value !== 'string') return null;
+			var result = value.trim();
+			if (result.length > maximum || (required && !result)) return null;
+			return result;
+		}
+
+		function strictHttps(value) {
+			if (value === '') return '';
+			var raw = strictText(value, MAX_AVATAR, true);
+			if (raw === null) return null;
+			try {
+				var parsed = new URL(raw);
+				if (parsed.protocol !== 'https:' || parsed.username || parsed.password) return null;
+				return parsed.href;
+			} catch (_) {
+				return null;
+			}
+		}
+
+		function validHex(value) {
+			return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value);
+		}
+
+		function validateQuestion(value) {
+			if (!hasOnlyKeys(value,
+				['participant','avatarUrl','question','category'])) return null;
+			var participant = strictText(value.participant, MAX_NAME, true);
+			var avatarUrl = strictHttps(value.avatarUrl);
+			var question = strictText(value.question, MAX_QUESTION, true);
+			var category = strictText(value.category, MAX_CATEGORY, false);
+			if (participant === null || avatarUrl === null ||
+				question === null || category === null) return null;
+			return {
+				participant: participant,
+				avatarUrl: avatarUrl,
+				question: question,
+				category: category
+			};
+		}
+
+		function readPayload() {
+			var hash = String(window.location.hash || '');
+			if (hash.length > MAX_FRAGMENT || hash.indexOf(PREFIX) !== 0) {
+				throw new Error('invalid fragment');
+			}
+			var payload = JSON.parse(decodeURIComponent(hash.slice(PREFIX.length)));
+			if (!hasOnlyKeys(payload, [
+				'version','sessionId','questions','currentIndex',
+				'answered','revision','theme'
+			]) || payload.version !== 1 ||
+				!Array.isArray(payload.questions) ||
+				payload.questions.length < 1 || payload.questions.length > 10) {
+				throw new Error('invalid payload');
+			}
+			var sessionId = strictText(payload.sessionId, 120, true);
+			if (sessionId === null || !/^[A-Za-z0-9._:-]+$/.test(sessionId)) {
+				throw new Error('invalid session');
+			}
+			var questions = payload.questions.map(validateQuestion);
+			if (questions.some(function(question) { return !question; })) {
+				throw new Error('invalid question');
+			}
+			if (!Number.isInteger(payload.currentIndex) ||
+				payload.currentIndex < 0 || payload.currentIndex >= questions.length ||
+				!Array.isArray(payload.answered) ||
+				payload.answered.length !== questions.length ||
+				payload.answered.some(function(value) {
+					return typeof value !== 'boolean';
+				}) ||
+				!Number.isSafeInteger(payload.revision) ||
+				payload.revision < 0 || payload.revision > 1000000 ||
+				!hasOnlyKeys(payload.theme,
+					['panel','text','accent','answered','panelOpacity']) ||
+				!validHex(payload.theme.panel) || !validHex(payload.theme.text) ||
+				!validHex(payload.theme.accent) || !validHex(payload.theme.answered) ||
+				typeof payload.theme.panelOpacity !== 'number' ||
+				!Number.isFinite(payload.theme.panelOpacity) ||
+				payload.theme.panelOpacity < .78 || payload.theme.panelOpacity > 1) {
+				throw new Error('invalid state');
+			}
+			return {
+				sessionId: sessionId,
+				questions: questions,
+				currentIndex: payload.currentIndex,
+				answered: payload.answered.slice(),
+				revision: payload.revision,
+				theme: payload.theme
+			};
+		}
+
+		function initials(name) {
+			var words = name.split(/\s+/).filter(Boolean);
+			if (!words.length) return '?';
+			var result = words[0].charAt(0);
+			if (words.length > 1) result += words[words.length - 1].charAt(0);
+			return result.toUpperCase();
+		}
+
+		function showAvatar(question) {
+			var label = 'Avatar fallback for ' + question.participant;
+			fallback.textContent = initials(question.participant);
+			fallback.setAttribute('aria-label', label);
+			avatar.style.display = 'none';
+			avatar.removeAttribute('src');
+			avatar.alt = '';
+			if (!question.avatarUrl) return;
+			var expected = question.avatarUrl;
+			avatar.onload = function() {
+				if (!state || state.questions[state.currentIndex].avatarUrl !== expected) return;
+				avatar.style.display = 'block';
+				avatar.alt = 'Participant avatar for ' + question.participant;
+				fallback.setAttribute('aria-hidden', 'true');
+			};
+			avatar.onerror = function() {
+				if (!state || state.questions[state.currentIndex].avatarUrl !== expected) return;
+				avatar.style.display = 'none';
+				avatar.removeAttribute('src');
+				avatar.alt = '';
+				fallback.removeAttribute('aria-hidden');
+				fallback.setAttribute('aria-label', label);
+			};
+			avatar.src = expected;
+		}
+
+		function applyTheme() {
+			document.documentElement.style.setProperty('--panel', state.theme.panel);
+			document.documentElement.style.setProperty('--text', state.theme.text);
+			document.documentElement.style.setProperty('--accent', state.theme.accent);
+			document.documentElement.style.setProperty('--answered', state.theme.answered);
+			document.documentElement.style.setProperty('--panel-opacity',
+				String(state.theme.panelOpacity));
+		}
+
+		function render() {
+			if (!state) return;
+			var current = state.questions[state.currentIndex];
+			var questionText = document.getElementById('question-text');
+			var participantName = document.getElementById('participant-name');
+			var category = document.getElementById('category');
+			var isAnswered = state.answered[state.currentIndex] === true;
+			questionText.textContent = current.question;
+			questionText.classList.toggle('medium',
+				current.question.length > 150 && current.question.length <= 260);
+			questionText.classList.toggle('long',
+				current.question.length > 260 && current.question.length <= 430);
+			questionText.classList.toggle('very-long', current.question.length > 430);
+			participantName.textContent = current.participant;
+			participantName.classList.toggle('long', current.participant.length > 42);
+			category.textContent = current.category;
+			category.classList.toggle('visible', !!current.category);
+			document.getElementById('position').textContent =
+				'Question ' + (state.currentIndex + 1) + ' of ' + state.questions.length;
+			document.getElementById('status-mark').textContent =
+				isAnswered ? '\u2713' : '';
+			document.getElementById('status-label').textContent =
+				isAnswered ? 'Answered' : 'Unanswered';
+			panel.classList.toggle('answered', isAnswered);
+			panel.setAttribute('aria-label',
+				(isAnswered ? 'Answered' : 'Unanswered') +
+				' participant question from ' + current.participant);
+			showAvatar(current);
+		}
+
+		function reducedMotionRequested() {
+			return typeof window.matchMedia === 'function' &&
+				window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+		}
+
+		function cancelTransition() {
+			if (transitionTimer !== null) {
+				clearTimeout(transitionTimer);
+				transitionTimer = null;
+			}
+			pendingState = null;
+			panel.classList.remove('transitioning');
+		}
+
+		function validateIncoming(incoming) {
+			if (!hasOnlyKeys(incoming, [
+				'type','sessionId','currentIndex','answered','revision'
+			]) || incoming.type !== 'participant_question_state' ||
+				incoming.sessionId !== state.sessionId ||
+				!Number.isInteger(incoming.currentIndex) ||
+				incoming.currentIndex < 0 ||
+				incoming.currentIndex >= state.questions.length ||
+				!Array.isArray(incoming.answered) ||
+				incoming.answered.length !== state.questions.length ||
+				incoming.answered.some(function(value) {
+					return typeof value !== 'boolean';
+				}) ||
+				!Number.isSafeInteger(incoming.revision) ||
+				incoming.revision <= state.revision ||
+				incoming.revision > 1000000) return null;
+			return {
+				currentIndex: incoming.currentIndex,
+				answered: incoming.answered.slice(),
+				revision: incoming.revision
+			};
+		}
+
+		function applyIncoming(incoming) {
+			if (!state || !incoming) return;
+			var next = validateIncoming(incoming);
+			if (!next) return;
+			if (pendingState && next.revision <= pendingState.revision) return;
+			if (reducedMotionRequested()) {
+				cancelTransition();
+				state.currentIndex = next.currentIndex;
+				state.answered = next.answered;
+				state.revision = next.revision;
+				render();
+				return;
+			}
+			pendingState = next;
+			panel.classList.add('transitioning');
+			if (transitionTimer !== null) return;
+			transitionTimer = setTimeout(function() {
+				transitionTimer = null;
+				if (unloading || !state || !pendingState) return;
+				var accepted = pendingState;
+				pendingState = null;
+				state.currentIndex = accepted.currentIndex;
+				state.answered = accepted.answered;
+				state.revision = accepted.revision;
+				render();
+				void panel.offsetHeight;
+				panel.classList.remove('transitioning');
+			}, TRANSITION_MS);
+		}
+
+		function failClosed() {
+			cancelTransition();
+			state = null;
+			shell.style.display = 'none';
+			document.getElementById('configuration-error').style.display = 'block';
+		}
+
+		function scheduleReconnect(socket) {
+			if (unloading || authenticationBlocked || ws !== socket ||
+				reconnectTimer !== null) return;
+			var timer = setTimeout(function() {
+				if (reconnectTimer !== timer) return;
+				reconnectTimer = null;
+				if (unloading || ws !== socket) return;
+				ws = null;
+				connect();
+			}, 2000);
+			reconnectTimer = timer;
+		}
+
+		function connect() {
+			if (unloading || authenticationBlocked || !state ||
+				reconnectTimer !== null) return;
+			if (ws && (ws.readyState === 0 || ws.readyState === 1)) return;
+			var socket = new WebSocket('ws://127.0.0.1:4455');
+			ws = socket;
+			socket.onmessage = function(event) {
+				if (unloading || authenticationBlocked || ws !== socket) return;
+				var msg;
+				try { msg = JSON.parse(event.data); } catch (_) { return; }
+				if (msg.op === 0) {
+					if (msg.d && Object.prototype.hasOwnProperty.call(msg.d, 'authentication')) {
+						authenticationBlocked = true;
+						try { socket.close(); } catch (_) {}
+						return;
+					}
+					socket.send(JSON.stringify({
+						op: 1, d: { rpcVersion: 1, eventSubscriptions: 1 }
+					}));
+					return;
+				}
+				if (msg.op !== 5 || !msg.d ||
+					msg.d.eventType !== 'CustomEvent') return;
+				applyIncoming(msg.d.eventData);
+			};
+			socket.onerror = function() {
+				if (unloading || ws !== socket) return;
+				try { socket.close(); } catch (_) {}
+				scheduleReconnect(socket);
+			};
+			socket.onclose = function() {
+				if (unloading || ws !== socket) return;
+				scheduleReconnect(socket);
+			};
+		}
+
+		function stop() {
+			if (unloading) return;
+			unloading = true;
+			shell.classList.add('exiting');
+			cancelTransition();
+			if (reconnectTimer !== null) {
+				clearTimeout(reconnectTimer);
+				reconnectTimer = null;
+			}
+			var socket = ws;
+			ws = null;
+			if (socket) {
+				socket.onmessage = null;
+				socket.onerror = null;
+				socket.onclose = null;
+				try { socket.close(); } catch (_) {}
+			}
+		}
+
+		try {
+			state = readPayload();
+			applyTheme();
+			render();
+			requestAnimationFrame(function() {
+				if (!unloading && state) shell.classList.add('ready');
+			});
+			connect();
+		} catch (_) {
+			failClosed();
+		}
+		window.addEventListener('beforeunload', stop);
+	})();
+	</script>
+</body>
+</html>
