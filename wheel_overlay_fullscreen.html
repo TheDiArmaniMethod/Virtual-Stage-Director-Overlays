@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <!--
-	Virtual Stage Director v1.6.8.1
-	- Loads an immutable entrant snapshot plus a targeted fullscreen session from the URL.
+	Virtual Stage Director v1.6.10.50
+	- Loads an immutable entrant snapshot plus a targeted fullscreen session from a private URL fragment.
 	- Announces readiness after OBS identification and acknowledges accepted spin commands.
 	- Rejects stale sessions, invalid winners, and commands received while already spinning.
 	- Uses one guarded, bounded-backoff reconnect timer and stops reconnecting on unload.
@@ -170,6 +170,12 @@ const wheelState = {
 };
 const RAFFLE_MAX_ENTRANTS = 60;
 const WHEEL_VARIANT = 'fullscreen';
+const WHEEL_FRAGMENT_PROTOCOL_VERSION = 1;
+const WHEEL_FRAGMENT_PREFIX = '#vsd-wheel=';
+const WHEEL_MAX_NAME_CODE_POINTS = 80;
+const WHEEL_MAX_DECODED_PAYLOAD_BYTES = 8192;
+const WHEEL_MAX_ENCODED_FRAGMENT_LENGTH = 24576;
+const WHEEL_MAX_SESSION_ID_LENGTH = 128;
 
 function sendWheelProtocolEvent(type, spinData) {
 	const ws = wheelState.obsSocket;
@@ -324,6 +330,94 @@ function stopWheelOBS() {
 	}
 }
 
+function wheelUnicodeMetrics(value) {
+	if (typeof value !== 'string') return { valid: false, codePoints: 0, utf8Bytes: 0 };
+	let codePoints = 0;
+	let utf8Bytes = 0;
+	for (let index = 0; index < value.length; index++) {
+		const first = value.charCodeAt(index);
+		if (first >= 0xD800 && first <= 0xDBFF) {
+			if (index + 1 >= value.length) return { valid: false, codePoints: 0, utf8Bytes: 0 };
+			const second = value.charCodeAt(index + 1);
+			if (second < 0xDC00 || second > 0xDFFF) return { valid: false, codePoints: 0, utf8Bytes: 0 };
+			index++;
+			codePoints++;
+			utf8Bytes += 4;
+		} else if (first >= 0xDC00 && first <= 0xDFFF) {
+			return { valid: false, codePoints: 0, utf8Bytes: 0 };
+		} else {
+			codePoints++;
+			utf8Bytes += first <= 0x7F ? 1 : (first <= 0x7FF ? 2 : 3);
+		}
+	}
+	return { valid: true, codePoints: codePoints, utf8Bytes: utf8Bytes };
+}
+
+function readWheelFragment() {
+	const fragment = window.location.hash;
+	if (fragment.length > WHEEL_MAX_ENCODED_FRAGMENT_LENGTH ||
+		!fragment.startsWith(WHEEL_FRAGMENT_PREFIX)) {
+		return { ok: false, error: 'fragment_envelope' };
+	}
+	const encoded = fragment.slice(WHEEL_FRAGMENT_PREFIX.length);
+	let decoded;
+	try {
+		decoded = decodeURIComponent(encoded);
+	} catch (error) {
+		return { ok: false, error: 'fragment_encoding' };
+	}
+	const decodedMetrics = wheelUnicodeMetrics(decoded);
+	if (!decodedMetrics.valid || decodedMetrics.utf8Bytes > WHEEL_MAX_DECODED_PAYLOAD_BYTES) {
+		return { ok: false, error: 'decoded_payload_size' };
+	}
+	let payload;
+	try {
+		payload = JSON.parse(decoded);
+	} catch (error) {
+		return { ok: false, error: 'payload_json' };
+	}
+	if (!payload || typeof payload !== 'object' || Array.isArray(payload)) {
+		return { ok: false, error: 'payload_type' };
+	}
+	const expectedKeys = ['version', 'wheelVariant', 'wheelSessionId', 'names'];
+	const keys = Object.keys(payload);
+	if (keys.length !== expectedKeys.length ||
+		expectedKeys.some(key => !Object.prototype.hasOwnProperty.call(payload, key))) {
+		return { ok: false, error: 'payload_properties' };
+	}
+	if (payload.version !== WHEEL_FRAGMENT_PROTOCOL_VERSION) {
+		return { ok: false, error: 'unsupported_version' };
+	}
+	if (payload.wheelVariant !== WHEEL_VARIANT) return { ok: false, error: 'invalid_variant' };
+	if (typeof payload.wheelSessionId !== 'string' ||
+		payload.wheelSessionId.length < 1 ||
+		payload.wheelSessionId.length > WHEEL_MAX_SESSION_ID_LENGTH ||
+		!/^[A-Za-z0-9][A-Za-z0-9._:-]*$/.test(payload.wheelSessionId)) {
+		return { ok: false, error: 'invalid_session' };
+	}
+	if (!Array.isArray(payload.names) ||
+		payload.names.length < 1 || payload.names.length > RAFFLE_MAX_ENTRANTS) {
+		return { ok: false, error: 'invalid_participant_count' };
+	}
+	for (let index = 0; index < payload.names.length; index++) {
+		if (!Object.prototype.hasOwnProperty.call(payload.names, index)) {
+			return { ok: false, error: 'sparse_names' };
+		}
+		const name = payload.names[index];
+		if (typeof name !== 'string') return { ok: false, error: 'invalid_name_type' };
+		const metrics = wheelUnicodeMetrics(name);
+		if (!metrics.valid) return { ok: false, error: 'invalid_unicode' };
+		if (name.length === 0 || name.trim().length === 0) return { ok: false, error: 'empty_name' };
+		if (metrics.codePoints > WHEEL_MAX_NAME_CODE_POINTS) {
+			return { ok: false, error: 'name_too_long' };
+		}
+	}
+	if (encodeURIComponent(JSON.stringify(payload)) !== encoded) {
+		return { ok: false, error: 'noncanonical_payload' };
+	}
+	return { ok: true, payload: payload, decodedBytes: decodedMetrics.utf8Bytes };
+}
+
 /**
  * Initialize the wheel
  */
@@ -335,8 +429,13 @@ function init() {
 	wheelState.canvas.width = 1000;
 	wheelState.canvas.height = 1000;
 
-	// Load settings from URL parameters
-	loadSettingsFromURL();
+	// Load the private participant/session fragment before starting any runtime work.
+	if (!loadSettingsFromURL()) {
+		document.getElementById('wheelContainer').style.display = 'none';
+		document.getElementById('winnerBanner').style.display = 'none';
+		console.warn('[Wheel FS Overlay] Configuration rejected:', 'invalid_fragment');
+		return;
+	}
 
 	// Position container silently at the correct offscreen start position.
 	// The enter animation is triggered by a wheel_enter BroadcastCustomEvent
@@ -353,26 +452,21 @@ function init() {
 	wheelState.lastFrameTime = Date.now();
 	scheduleWheelAnimationFrame(animate);
 
-	console.log('[Wheel FS Overlay V4] Initialized with', wheelState.names.length, 'names');
+	console.log('[Wheel FS Overlay V4] Initialized participant count:', wheelState.names.length,
+		'protocol version:', WHEEL_FRAGMENT_PROTOCOL_VERSION);
 }
 
 /**
- * Load settings from URL parameters
+ * Load participant/session data from the private fragment and appearance from
+ * non-sensitive query parameters.
  */
 function loadSettingsFromURL() {
 	const params = new URLSearchParams(window.location.search);
-	wheelState.variant = params.get('wheelVariant') === WHEEL_VARIANT ? WHEEL_VARIANT : '';
-	wheelState.sessionId = params.get('wheelSessionId') || '';
-
-	// Get names and parse
-	const namesStr = params.get('names') || '';
-	const parsedNames = namesStr.split('\n').map(n => n.replace(/\s+/g, ' ').trim()).filter(n => n);
-	if (parsedNames.length > RAFFLE_MAX_ENTRANTS) {
-		console.error('[Wheel FS Overlay] Too many names supplied:', parsedNames.length, 'max is', RAFFLE_MAX_ENTRANTS);
-		wheelState.names = Object.freeze([]);
-	} else {
-		wheelState.names = Object.freeze(parsedNames.slice());
-	}
+	const fragmentResult = readWheelFragment();
+	if (!fragmentResult.ok) return false;
+	wheelState.variant = fragmentResult.payload.wheelVariant;
+	wheelState.sessionId = fragmentResult.payload.wheelSessionId;
+	wheelState.names = Object.freeze(fragmentResult.payload.names.slice());
 
 	// Get settings
 	wheelState.settings = {
@@ -399,8 +493,10 @@ function loadSettingsFromURL() {
 	banner.style.background = wheelState.settings.bannerBgColor;
 	banner.style.color = wheelState.settings.bannerTextColor;
 
-	console.log('[Wheel FS Overlay] Loaded', wheelState.names.length, 'names from URL');
+	console.log('[Wheel FS Overlay] Loaded participant count:', wheelState.names.length,
+		'decoded payload bytes:', fragmentResult.decodedBytes);
 	console.log('[Wheel FS Overlay] Settings:', wheelState.settings);
+	return true;
 }
 
 /**
@@ -508,11 +604,11 @@ function spinWheel(winner) {
 
 	let targetWinnerIndex = wheelState.names.indexOf(winner);
 	if (targetWinnerIndex === -1) {
-		console.error('[Wheel FS Overlay] Spin rejected because winner is not in the displayed list:', winner);
+		console.error('[Wheel FS Overlay] Spin rejected: winner is not in the displayed list');
 		return false;
 	}
 
-	console.log('[Wheel FS Overlay] Target winner:', wheelState.names[targetWinnerIndex], 'at index', targetWinnerIndex);
+	console.log('[Wheel FS Overlay] Target participant index:', targetWinnerIndex);
 
 	// Calculate rotation to land on this winner
 	const anglePerSegment = 360 / wheelState.names.length;
