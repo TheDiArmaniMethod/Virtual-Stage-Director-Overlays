@@ -33,9 +33,10 @@
 		#question-shell {
 			position: fixed;
 			inset: 0;
+			align-items: flex-end;
 			display: grid;
 			place-items: center;
-			padding: 74px 104px;
+			padding: 72px 104px 50px;
 			opacity: 0;
 			transform: translateY(28px) scale(.988);
 			transition: opacity 420ms ease,
@@ -54,7 +55,7 @@
 			position: relative;
 			width: 100%;
 			max-width: 1640px;
-			min-height: 690px;
+			min-height: 400px;
 			overflow: hidden;
 			border: 1px solid rgba(255,255,255,.16);
 			border-radius: 28px;
@@ -86,9 +87,9 @@
 			position: relative;
 			z-index: 1;
 			display: grid;
-			grid-template-rows: auto minmax(330px,1fr) auto;
-			min-height: 690px;
-			padding: 48px 62px 52px;
+			grid-template-rows: auto minmax(130px,1fr) auto;
+			min-height: 400px;
+			padding: 34px 62px 30px;
 			transition: opacity 210ms ease, transform 250ms ease;
 		}
 		#question-panel.transitioning #question-content {
@@ -133,41 +134,41 @@
 		#category.visible { display: block; }
 		.question-block {
 			align-self: center;
-			padding: 38px 24px 34px;
+			padding: 20px 24px 18px;
 		}
 		#question-text {
 			max-width: 1480px;
 			margin: 0;
 			font-family: Georgia, "Times New Roman", serif;
-			font-size: 67px;
+			font-size: 54px;
 			font-weight: 600;
 			line-height: 1.15;
 			letter-spacing: -.018em;
 			overflow-wrap: anywhere;
 			white-space: pre-wrap;
 		}
-		#question-text.medium { font-size: 57px; line-height: 1.18; }
-		#question-text.long { font-size: 45px; line-height: 1.22; }
-		#question-text.very-long { font-size: 37px; line-height: 1.24; }
+		#question-text.medium { font-size: 48px; line-height: 1.18; }
+		#question-text.long { font-size: 40px; line-height: 1.22; }
+		#question-text.very-long { font-size: 34px; line-height: 1.24; }
 		.attribution-row {
 			display: grid;
 			grid-template-columns: minmax(0,1fr) auto;
 			align-items: center;
 			gap: 42px;
-			padding-top: 28px;
+			padding-top: 18px;
 			border-top: 1px solid rgba(255,255,255,.14);
 		}
 		.participant {
 			display: grid;
-			grid-template-columns: 94px minmax(0,1fr);
+			grid-template-columns: 72px minmax(0,1fr);
 			align-items: center;
 			gap: 22px;
 			min-width: 0;
 		}
 		.avatar-frame {
 			position: relative;
-			width: 94px;
-			height: 94px;
+			width: 72px;
+			height: 72px;
 			overflow: hidden;
 			border: 2px solid color-mix(in srgb, var(--accent) 70%, white);
 			border-radius: 50%;
@@ -187,7 +188,7 @@
 			display: grid;
 			place-items: center;
 			color: var(--text);
-			font-size: 31px;
+			font-size: 25px;
 			font-weight: 800;
 			letter-spacing: .03em;
 		}
@@ -203,7 +204,7 @@
 		#participant-name {
 			margin: 0;
 			overflow: hidden;
-			font-size: 35px;
+			font-size: 30px;
 			font-weight: 780;
 			line-height: 1.12;
 			overflow-wrap: anywhere;
