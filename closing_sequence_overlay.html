@@ -37,6 +37,8 @@
 		.credit-group { margin-bottom:22px; }
 		.credit-label { color:var(--accent); font-size:23px; font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
 		.credit-line { margin-top:6px; font-size:32px; overflow-wrap:anywhere; }
+		#card[data-page-type="credits"] #primary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:16px 48px; }
+		#card[data-page-type="credits"] .credit-group { margin-bottom:0; }
 		.meta { color:var(--accent); font-weight:700; }
 		#aside { display:none; text-align:center; }
 		#aside.visible { display:block; }
@@ -271,7 +273,9 @@
 			var allowed = ['summary','resources','credits','next','thanks'];
 			if (!page || allowed.indexOf(page.type) === -1) throw new Error('invalid type');
 
-			document.getElementById('card').style.display = 'flex';
+			var card = document.getElementById('card');
+			card.dataset.pageType = page.type;
+			card.style.display = 'flex';
 			document.getElementById('invalid').style.display = 'none';
 			document.getElementById('eyebrow').textContent = text(page.eyebrow, 50) || 'Closing Sequence';
 			document.getElementById('heading').textContent = text(page.heading, 80);
