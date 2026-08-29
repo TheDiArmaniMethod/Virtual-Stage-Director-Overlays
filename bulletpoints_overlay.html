@@ -186,7 +186,11 @@ html,body{width:1920px;height:1080px;overflow:hidden;background:transparent;font
     return row;
   });
 
-  els.forEach((el,i)=>setTimeout(()=>el.classList.add('visible'),delay+i*stagger));
+  // Let OBS paint the hidden starting state before any zero-delay reveal.
+  // Without this frame boundary, Bullet 1 can appear before its transition begins.
+  requestAnimationFrame(()=>requestAnimationFrame(()=>{
+    els.forEach((el,i)=>setTimeout(()=>el.classList.add('visible'),delay+i*stagger));
+  }));
 
   window.hideAll=function(){
     els.forEach((el,i)=>setTimeout(()=>{
