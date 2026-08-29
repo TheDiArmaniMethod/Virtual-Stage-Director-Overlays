@@ -41,6 +41,8 @@
       const wind       = +(qs.get('wind')     || 0.00);   // px/frame^2
 
       const count      = Math.min(600, Math.max(5, +(qs.get('count') || 60)));
+      const shots      = Math.min(10, Math.max(1, +(qs.get('shots') || 1)));
+      const shotDelay  = Math.min(5000, Math.max(100, +(qs.get('shotDelay') || 700)));
       const spreadDeg  = +(qs.get('spread') || 60);
       const scalar     = +(qs.get('scalar')   || 1.0);    // global size multiplier
       const emojiPx    = +(qs.get('emojiScalar') || 42);  // base font size in px
@@ -165,6 +167,12 @@
       // -----------------------------
       function eBurst(opts={}){ makeBurst(count, Object.assign({}, opts)); }
 
+      function eBurstSequence(){
+        for (let shot=0; shot<shots; shot++) {
+          setTimeout(() => eBurst(), shot * shotDelay);
+        }
+      }
+
       function eCelebrate(s=seconds){
         const end = Date.now() + s*1000;
         const tick = () => {
@@ -226,7 +234,7 @@
       // -----------------------------
       // UI Buttons & Visibility
       // -----------------------------
-      document.getElementById('btnBurst').onclick = () => eBurst();
+      document.getElementById('btnBurst').onclick = () => eBurstSequence();
       document.getElementById('btnCelebrate').onclick = () => eCelebrate(seconds);
       document.getElementById('btnContinuous').onclick = () => eContinuous(duration);
       document.getElementById('btnTopRain').onclick = () => eTopRain(rainDuration);
@@ -237,7 +245,7 @@
       // -----------------------------
       if (auto) {
         requestAnimationFrame(() => {
-          if (mode === 'burst') eBurst();
+          if (mode === 'burst') eBurstSequence();
           else if (mode === 'celebrate') eCelebrate(seconds);
           else if (mode === 'continuous') eContinuous(duration);
           else if (mode === 'rain') eTopRain(rainDuration);
@@ -274,7 +282,7 @@
       }
 
       // Expose for console
-      window._confetti = { eBurst, eCelebrate, eContinuous, eTopRain };
+      window._confetti = { eBurst, eBurstSequence, eCelebrate, eContinuous, eTopRain };
     })();
   </script>
 </body>
