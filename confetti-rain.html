@@ -168,8 +168,14 @@
       function eCelebrate(s=seconds){
         const end = Date.now() + s*1000;
         const tick = () => {
-          eBurst({ angle:60,  originX:0.0, originY:baseOriginY, localVelocity: velocity * 1.1 });
-          eBurst({ angle:120, originX:1.0, originY:baseOriginY, localVelocity: velocity * 1.1 });
+          const pairedCount = Math.min(count,
+            Math.floor(Math.max(0, maxParticles - particles.length) / 2));
+          if (pairedCount > 0) {
+            makeBurst(pairedCount, { angle:60, originX:0.0,
+              originY:baseOriginY, localVelocity:velocity * 1.1 });
+            makeBurst(pairedCount, { angle:120, originX:1.0,
+              originY:baseOriginY, localVelocity:velocity * 1.1 });
+          }
           if (Date.now() < end) requestAnimationFrame(tick);
         };
         tick();
