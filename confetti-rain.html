@@ -41,7 +41,7 @@
       const wind       = +(qs.get('wind')     || 0.00);   // px/frame^2
 
       const count      = Math.min(600, Math.max(5, +(qs.get('count') || 60)));
-      const shots      = Math.min(10, Math.max(1, +(qs.get('shots') || 1)));
+      const shots      = Math.min(10, Math.max(1, +(qs.get('shots') || 2)));
       const shotDelay  = Math.min(5000, Math.max(100, +(qs.get('shotDelay') || 700)));
       const spreadDeg  = +(qs.get('spread') || 60);
       const scalar     = +(qs.get('scalar')   || 1.0);    // global size multiplier
